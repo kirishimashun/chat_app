@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8080:8080"  # 正しい書き方
+    volumes:
+      - ./backend:/app
+    working_dir: /app
+    command: go run main.go
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3001:3000"  # 正しい書き方
+    volumes:
+      - ./frontend:/app
+    working_dir: /app
+    command: npm run dev
+
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: chat_app_db
+      POSTGRES_USER: chatuser  # 修正後
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"  # 正しい書き方
+    volumes:
+      - chat_app_db_data:/var/lib/postgresql/data
+
+  pgadmin:
+    image: dpage/pgadmin4
+    restart: always
+    ports:
+      - "5050:80"  # 正しい書き方
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+
+volumes:
+  chat_app_db_data:
+  pgadmin-data:

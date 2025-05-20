@@ -1,0 +1,19 @@
+.message {
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  border-radius: 8px;
+  max-width: 70%;
+  word-break: break-word;
+}
+
+.myMessage {
+  background-color: #e6f7ff;
+  align-self: flex-end;
+  text-align: right;
+}
+
+.otherMessage {
+  background-color: #f2f2f2;
+  align-self: flex-start;
+  text-align: left;
+}
