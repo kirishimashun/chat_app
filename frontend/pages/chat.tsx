@@ -3,6 +3,8 @@ import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import styles from "./ChatPage.module.css";
 
+// 型定義
+
 type User = {
   id: number;
   username: string;
@@ -31,6 +33,7 @@ export default function ChatPage() {
   const router = useRouter();
   const messageEndRef = useRef<HTMLDivElement | null>(null);
 
+  // ユーザー情報取得
   useEffect(() => {
     fetch("http://localhost:8080/me", { credentials: "include" })
       .then(res => res.json())
@@ -38,6 +41,7 @@ export default function ChatPage() {
       .catch(() => router.push("/login"));
   }, []);
 
+  // WebSocket接続
   useEffect(() => {
     if (!userId) return;
     const ws = new WebSocket("ws://localhost:8080/ws");
@@ -49,35 +53,50 @@ export default function ChatPage() {
     return () => ws.close();
   }, [userId]);
 
+  // ✅ ユーザー一覧取得（復元）
   useEffect(() => {
     if (!userId) return;
 
-    // ユーザー一覧取得
     fetch("http://localhost:8080/users", { credentials: "include" })
-      .then(res => res.json())
-      .then(setUsers)
+      .then(async res => {
+        if (!res.ok) throw new Error(`ユーザー取得失敗: ${await res.text()}`);
+        return res.json();
+      })
+      .then(data => setUsers(data))
       .catch(err => {
-        console.error("ユーザー取得失敗:", err);
+        console.error(err);
+        alert("ユーザー一覧の取得に失敗しました。ログイン状態を確認してください。");
         setUsers([]);
       });
+  }, [userId]);
 
-    // グループチャット一覧取得（null安全）
+  // グループチャット一覧取得
+  useEffect(() => {
+    if (!userId) return;
+
     fetch("http://localhost:8080/group_rooms", { credentials: "include" })
-      .then(async res => {
+      .then(async (res) => {
         if (!res.ok) {
           const text = await res.text();
+          console.error("❌ HTTPエラー:", text);
           throw new Error(`サーバーエラー: ${text}`);
         }
+
         const data = await res.json();
-        if (!Array.isArray(data)) throw new Error("配列ではないレスポンス");
+        if (!Array.isArray(data)) {
+          console.error("❌ 想定外のレスポンス形式:", data);
+          throw new Error("配列ではないレスポンス");
+        }
+
         setGroupRooms(data);
       })
-      .catch(err => {
-        console.error("❌ group_rooms取得失敗:", err);
+      .catch((err) => {
+        console.error("❌ /group_rooms 取得失敗:", err);
         setGroupRooms([]);
       });
   }, [userId]);
 
+  // 前回選択していたユーザー復元
   const restoreLastUser = async (users: User[]) => {
     const lastId = localStorage.getItem(`lastSelectedUserId_user${userId}`);
     if (!lastId) return;
@@ -108,6 +127,7 @@ export default function ChatPage() {
     }
   }, [messages]);
 
+  // ユーザークリック
   const handleUserClick = async (user: User) => {
     setSelectedUser(user);
     localStorage.setItem(`lastSelectedUserId_user${userId}`, user.id.toString());
@@ -137,6 +157,8 @@ export default function ChatPage() {
     router.push("/login");
   };
 
+  // --- UI ---
+
   return (
     <div style={{ display: "flex", height: "100vh" }}>
       {/* サイドバー */}
@@ -147,20 +169,24 @@ export default function ChatPage() {
           ＋ グループ作成
         </button>
 
-        <h3>グループチャット</h3>
-        {Array.isArray(groupRooms) && groupRooms.map(room => (
-          <div key={room.id} style={{ padding: "0.5rem", cursor: "pointer", background: roomId === room.id ? "#eee" : "" }}
-            onClick={async () => {
-              setSelectedUser(null);
-              setRoomId(room.id);
-              const res = await fetch(`http://localhost:8080/messages?room_id=${room.id}`, { credentials: "include" });
-              const data = await res.json();
-              setMessages(data || []);
-            }}
-          >
-            {room.room_name || `ルーム ${room.id}`}
-          </div>
-        ))}
+       <h3>グループチャット</h3>
+       {Array.isArray(groupRooms) && groupRooms.length > 0 ? (
+         groupRooms.map(room => (
+           <div key={room.id} style={{ padding: "0.5rem", cursor: "pointer", background: roomId === room.id ? "#eee" : "" }}
+             onClick={async () => {
+               setSelectedUser(null);
+               setRoomId(room.id);
+               const res = await fetch(`http://localhost:8080/messages?room_id=${room.id}`, { credentials: "include" });
+               const data = await res.json();
+               setMessages(data || []);
+             }}
+           >
+             {room.room_name || `ルーム ${room.id}`}
+           </div>
+         ))
+       ) : (
+         <div style={{ padding: "0.5rem", color: "#888" }}>なし</div>
+       )}
 
         <h3 style={{ marginTop: "1rem" }}>ユーザー一覧</h3>
         {users.map(user => (

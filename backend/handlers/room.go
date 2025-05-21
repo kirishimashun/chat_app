@@ -133,7 +133,7 @@ func GetGroupRooms(w http.ResponseWriter, r *http.Request) {
         FROM chat_rooms cr
         JOIN room_members rm ON cr.id = rm.room_id
         WHERE rm.user_id = $1 AND cr.is_group = 1
-        `, currentUserID)
+    `, currentUserID)
 
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -143,7 +143,9 @@ func GetGroupRooms(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	var rooms []models.ChatRoom
+	// ✅ nilじゃなくて空配列として初期化
+	rooms := make([]models.ChatRoom, 0)
+
 	for rows.Next() {
 		var room models.ChatRoom
 		if err := rows.Scan(&room.ID, &room.RoomName, &room.IsGroup); err != nil {
@@ -155,5 +157,5 @@ func GetGroupRooms(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(rooms)
+	json.NewEncoder(w).Encode(rooms) // ✅ 空でも [] を返すようになる
 }
