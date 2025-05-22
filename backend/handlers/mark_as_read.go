@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// メッセージを既読としてマークするエンドポイント
 func MarkMessageAsRead(w http.ResponseWriter, r *http.Request) {
 	messageIDStr := r.URL.Query().Get("message_id")
 	userIDStr := r.URL.Query().Get("user_id")
@@ -31,7 +30,10 @@ func MarkMessageAsRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// まず存在チェック
+	// 既読時間
+	readAt := time.Now()
+
+	// 存在チェック
 	var exists bool
 	err = db.Conn.QueryRow(`
 		SELECT EXISTS (
@@ -44,27 +46,39 @@ func MarkMessageAsRead(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if exists {
-		// 存在すれば更新
 		_, err = db.Conn.Exec(`
 			UPDATE message_reads SET read_at = $1
 			WHERE message_id = $2 AND user_id = $3
-		`, time.Now(), messageID, userID)
+		`, readAt, messageID, userID)
 		if err != nil {
 			http.Error(w, "UPDATE error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		log.Printf("✅ UPDATE read_at: message_id=%d user_id=%d", messageID, userID)
 	} else {
-		// なければ新規挿入
 		_, err = db.Conn.Exec(`
 			INSERT INTO message_reads (message_id, user_id, read_at)
 			VALUES ($1, $2, $3)
-		`, messageID, userID, time.Now())
+		`, messageID, userID, readAt)
 		if err != nil {
 			http.Error(w, "INSERT error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		log.Printf("✅ INSERT read_at: message_id=%d user_id=%d", messageID, userID)
+	}
+
+	// 🔧 メッセージ送信者を取得して通知
+	var senderID int
+	err = db.Conn.QueryRow(`SELECT sender_id FROM messages WHERE id = $1`, messageID).Scan(&senderID)
+	if err == nil {
+		NotifyUser(senderID, map[string]interface{}{
+			"type":       "read",
+			"message_id": messageID,
+			"read_at":    readAt.Format(time.RFC3339),
+		})
+		log.Printf("📡 WebSocket通知: sender_id=%d message_id=%d", senderID, messageID)
+	} else {
+		log.Printf("❌ 送信者取得失敗: %v", err)
 	}
 
 	w.WriteHeader(http.StatusOK)

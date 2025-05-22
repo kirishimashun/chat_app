@@ -32,6 +32,7 @@ func main() {
 	r.HandleFunc("/create-chat-room", handlers.CreateChatRoom).Methods("POST") // 旧名APIなら整理も検討
 	r.HandleFunc("/my-rooms", handlers.GetMyRooms).Methods("GET")
 	r.HandleFunc("/group_rooms", handlers.GetGroupRooms).Methods("GET")
+	r.HandleFunc("/messages/read", handlers.MarkAllAsRead).Methods("POST")
 
 	// 🌐 WebSocket
 	r.HandleFunc("/ws", handlers.HandleWebSocket)
