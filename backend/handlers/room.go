@@ -4,6 +4,7 @@ import (
 	"backend/db"
 	"backend/middleware"
 	"backend/models"
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -42,16 +43,60 @@ func GetOrCreateRoom(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]int{"room_id": roomID})
 }
 
+// getOrCreateRoomID は 1対1チャット用のルームを取得または作成する
+func getOrCreateRoomID(user1ID, user2ID int) (int, error) {
+	var roomID int
+
+	tx, err := db.Conn.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	err = tx.QueryRow(`
+		SELECT room_id FROM room_members
+		WHERE user_id IN ($1, $2)
+		GROUP BY room_id
+		HAVING COUNT(DISTINCT user_id) = 2
+	`, user1ID, user2ID).Scan(&roomID)
+
+	if err == sql.ErrNoRows {
+		err = tx.QueryRow(`
+			INSERT INTO chat_rooms (room_name, is_group, created_at, updated_at)
+			VALUES ('', false, NOW(), NOW())
+			RETURNING id
+		`).Scan(&roomID)
+		if err != nil {
+			return 0, err
+		}
+
+		for _, uid := range []int{user1ID, user2ID} {
+			_, err := tx.Exec(`
+				INSERT INTO room_members (room_id, user_id, joined_at)
+				VALUES ($1, $2, NOW())
+			`, roomID, uid)
+			if err != nil {
+				return 0, err
+			}
+		}
+	} else if err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return roomID, nil
+}
+
 // POST /rooms グループルーム作成ハンドラ
 func CreateGroupRoom(w http.ResponseWriter, r *http.Request) {
-	// 認証
 	currentUserID, err := middleware.ValidateToken(r)
 	if err != nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	// JSONデコード
 	var req models.CreateRoomRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
@@ -59,7 +104,6 @@ func CreateGroupRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// 自分が含まれていないなら追加
 	found := false
 	for _, uid := range req.UserIDs {
 		if uid == currentUserID {
@@ -71,7 +115,6 @@ func CreateGroupRoom(w http.ResponseWriter, r *http.Request) {
 		req.UserIDs = append(req.UserIDs, currentUserID)
 	}
 
-	// トランザクションで挿入
 	tx, err := db.Conn.Begin()
 	if err != nil {
 		http.Error(w, "DB error", http.StatusInternalServerError)
@@ -79,7 +122,6 @@ func CreateGroupRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	// ✅ SQL文をバッククォート `` で囲む（Goの文法）
 	var roomID int
 	err = tx.QueryRow(`
 		INSERT INTO chat_rooms (room_name, is_group, created_at, updated_at)
@@ -129,11 +171,11 @@ func GetGroupRooms(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := db.Conn.Query(`
-        SELECT cr.id, cr.room_name, cr.is_group
-        FROM chat_rooms cr
-        JOIN room_members rm ON cr.id = rm.room_id
-        WHERE rm.user_id = $1 AND cr.is_group = 1
-    `, currentUserID)
+		SELECT cr.id, cr.room_name, cr.is_group
+		FROM chat_rooms cr
+		JOIN room_members rm ON cr.id = rm.room_id
+		WHERE rm.user_id = $1 AND cr.is_group = 1
+	`, currentUserID)
 
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -143,7 +185,6 @@ func GetGroupRooms(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	// ✅ nilじゃなくて空配列として初期化
 	rooms := make([]models.ChatRoom, 0)
 
 	for rows.Next() {
@@ -157,5 +198,5 @@ func GetGroupRooms(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(rooms) // ✅ 空でも [] を返すようになる
+	json.NewEncoder(w).Encode(rooms)
 }

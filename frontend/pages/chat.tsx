@@ -1,9 +1,7 @@
-'use client';
+"use client";
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import styles from "./ChatPage.module.css";
-
-// 型定義
 
 type User = {
   id: number;
@@ -13,6 +11,8 @@ type User = {
 type Message = {
   sender_id: number;
   content: string;
+  read_at?: string | null;
+  id: number;
 };
 
 type RoomInfo = {
@@ -33,7 +33,27 @@ export default function ChatPage() {
   const router = useRouter();
   const messageEndRef = useRef<HTMLDivElement | null>(null);
 
-  // ユーザー情報取得
+  const restoreLastUser = async (users: User[]) => {
+    const lastId = localStorage.getItem(`lastSelectedUserId_user${userId}`);
+    if (!lastId) return;
+    const found = users.find((u) => u.id === Number(lastId));
+    if (!found) return;
+
+    setSelectedUser(found);
+
+    try {
+      const roomRes = await fetch(`http://localhost:8080/room?user_id=${found.id}`, { credentials: "include" });
+      const { room_id } = await roomRes.json();
+      setRoomId(room_id);
+
+      const msgRes = await fetch(`http://localhost:8080/messages?room_id=${room_id}`, { credentials: "include" });
+      const msgs = await msgRes.json();
+      setMessages(msgs || []);
+    } catch (err) {
+      console.error("❌ メッセージ復元失敗:", err);
+    }
+  };
+
   useEffect(() => {
     fetch("http://localhost:8080/me", { credentials: "include" })
       .then(res => res.json())
@@ -41,28 +61,51 @@ export default function ChatPage() {
       .catch(() => router.push("/login"));
   }, []);
 
-  // WebSocket接続
   useEffect(() => {
     if (!userId) return;
     const ws = new WebSocket("ws://localhost:8080/ws");
-    ws.onmessage = (event) => {
+
+    ws.onmessage = async (event) => {
       const data = JSON.parse(event.data);
-      setMessages(prev => [...prev, data]);
+      console.log("✅ onmessage発火:", data, "userId:", userId, "roomId:", roomId);
+
+      if (data.type === "message" && roomId) {
+        await fetch(`http://localhost:8080/messages?room_id=${roomId}`, {
+          credentials: "include",
+        })
+          .then(res => res.json())
+          .then(msgs => {
+            setMessages(msgs);
+            console.log("📥 最新メッセージに更新");
+          });
+      }
+
+      // ✅ 自分のメッセージが相手に読まれた通知（LINE方式）
+      if (data.type === "read") {
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === data.message_id ? { ...m, read_at: data.read_at } : m
+          )
+        );
+        console.log("✅ 自分のメッセージに既読がついた:", data.message_id);
+      }
     };
+
     setSocket(ws);
     return () => ws.close();
-  }, [userId]);
+  }, [userId, roomId]);
 
-  // ✅ ユーザー一覧取得（復元）
   useEffect(() => {
     if (!userId) return;
-
     fetch("http://localhost:8080/users", { credentials: "include" })
       .then(async res => {
         if (!res.ok) throw new Error(`ユーザー取得失敗: ${await res.text()}`);
         return res.json();
       })
-      .then(data => setUsers(data))
+      .then(data => {
+        setUsers(data);
+        restoreLastUser(data);
+      })
       .catch(err => {
         console.error(err);
         alert("ユーザー一覧の取得に失敗しました。ログイン状態を確認してください。");
@@ -70,74 +113,20 @@ export default function ChatPage() {
       });
   }, [userId]);
 
-  // グループチャット一覧取得
   useEffect(() => {
     if (!userId) return;
-
     fetch("http://localhost:8080/group_rooms", { credentials: "include" })
-      .then(async (res) => {
-        if (!res.ok) {
-          const text = await res.text();
-          console.error("❌ HTTPエラー:", text);
-          throw new Error(`サーバーエラー: ${text}`);
-        }
-
+      .then(async res => {
+        if (!res.ok) throw new Error(`グループ取得失敗: ${await res.text()}`);
         const data = await res.json();
-        if (!Array.isArray(data)) {
-          console.error("❌ 想定外のレスポンス形式:", data);
-          throw new Error("配列ではないレスポンス");
-        }
-
+        if (!Array.isArray(data)) throw new Error("配列ではありません");
         setGroupRooms(data);
       })
-      .catch((err) => {
+      .catch(err => {
         console.error("❌ /group_rooms 取得失敗:", err);
         setGroupRooms([]);
       });
   }, [userId]);
-
-  // 前回選択していたユーザー復元
-  const restoreLastUser = async (users: User[]) => {
-    const lastId = localStorage.getItem(`lastSelectedUserId_user${userId}`);
-    if (!lastId) return;
-    const found = users.find((u) => u.id === Number(lastId));
-    if (!found) return;
-    setSelectedUser(found);
-    try {
-      const roomRes = await fetch(`http://localhost:8080/room?user_id=${found.id}`, { credentials: "include" });
-      const { room_id } = await roomRes.json();
-      setRoomId(room_id);
-      const msgRes = await fetch(`http://localhost:8080/messages?room_id=${room_id}`, { credentials: "include" });
-      const msgs = await msgRes.json();
-      setMessages(msgs || []);
-    } catch (err) {
-      console.error("復元失敗:", err);
-    }
-  };
-
-  useEffect(() => {
-    if (users.length > 0 && userId !== null) {
-      restoreLastUser(users);
-    }
-  }, [users, userId]);
-
-  useEffect(() => {
-    if (messageEndRef.current) {
-      messageEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages]);
-
-  // ユーザークリック
-  const handleUserClick = async (user: User) => {
-    setSelectedUser(user);
-    localStorage.setItem(`lastSelectedUserId_user${userId}`, user.id.toString());
-    const res = await fetch(`http://localhost:8080/room?user_id=${user.id}`, { credentials: "include" });
-    const data = await res.json();
-    setRoomId(data.room_id);
-    const messageRes = await fetch(`http://localhost:8080/messages?room_id=${data.room_id}`, { credentials: "include" });
-    const messageData = await messageRes.json();
-    setMessages(messageData || []);
-  };
 
   const handleSendMessage = async () => {
     if (!messageText.trim() || userId == null || roomId == null || !socket) return;
@@ -148,7 +137,7 @@ export default function ChatPage() {
       content: messageText.trim(),
     };
     socket.send(JSON.stringify(msg));
-    setMessages(prev => [...prev, { sender_id: userId, content: messageText }]);
+    setMessages(prev => [...prev, { sender_id: userId, content: messageText, id: Date.now() }]);
     setMessageText("");
   };
 
@@ -157,37 +146,109 @@ export default function ChatPage() {
     router.push("/login");
   };
 
-  // --- UI ---
+  const handleUserClick = async (user: User) => {
+    setSelectedUser(user);
+    localStorage.setItem(`lastSelectedUserId_user${userId}`, user.id.toString());
+    const res = await fetch(`http://localhost:8080/room?user_id=${user.id}`, { credentials: "include" });
+    const data = await res.json();
+    setRoomId(data.room_id);
+    const msgRes = await fetch(`http://localhost:8080/messages?room_id=${data.room_id}`, { credentials: "include" });
+    const msgs = await msgRes.json();
+    setMessages(msgs || []);
+  };
+
+  const renderMessages = () => {
+    return messages.map((msg, i) => {
+      const isMyMessage = msg.sender_id === userId;
+      const isRead = !!msg.read_at;
+
+      return (
+        <div
+          key={i}
+          style={{
+            display: "flex",
+            justifyContent: isMyMessage ? "flex-end" : "flex-start",
+            marginBottom: "8px",
+          }}
+        >
+          {isMyMessage ? (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "row",
+                alignItems: "flex-end",
+              }}
+            >
+              {isRead && (
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    color: "gray",
+                    whiteSpace: "nowrap",
+                    marginRight: "4px",
+                  }}
+                >
+                  既読
+                </span>
+              )}
+              <div
+                style={{
+                  backgroundColor: "#dff0ff",
+                  padding: "0.5rem 0.8rem",
+                  borderRadius: "1rem",
+                  maxWidth: "70%",
+                  wordBreak: "break-word",
+                }}
+              >
+                自分: {msg.content}
+              </div>
+            </div>
+          ) : (
+            <div
+              style={{
+                backgroundColor: "#f1f1f1",
+                padding: "0.5rem 0.8rem",
+                borderRadius: "1rem",
+                maxWidth: "70%",
+                wordBreak: "break-word",
+              }}
+            >
+              相手: {msg.content}
+            </div>
+          )}
+        </div>
+      );
+    });
+  };
+
+  useEffect(() => {
+    if (messageEndRef.current) {
+      messageEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages]);
 
   return (
     <div style={{ display: "flex", height: "100vh" }}>
-      {/* サイドバー */}
       <div style={{ width: "220px", borderRight: "1px solid #ccc", padding: "1rem", display: "flex", flexDirection: "column" }}>
         <button
           onClick={() => router.push("/group/create")}
-          style={{ marginBottom: "1rem", padding: "0.4rem 0.6rem", backgroundColor: "#3498db", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}>
+          style={{ marginBottom: "1rem", padding: "0.4rem 0.6rem", backgroundColor: "#3498db", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}
+        >
           ＋ グループ作成
         </button>
-
-       <h3>グループチャット</h3>
-       {Array.isArray(groupRooms) && groupRooms.length > 0 ? (
-         groupRooms.map(room => (
-           <div key={room.id} style={{ padding: "0.5rem", cursor: "pointer", background: roomId === room.id ? "#eee" : "" }}
-             onClick={async () => {
-               setSelectedUser(null);
-               setRoomId(room.id);
-               const res = await fetch(`http://localhost:8080/messages?room_id=${room.id}`, { credentials: "include" });
-               const data = await res.json();
-               setMessages(data || []);
-             }}
-           >
-             {room.room_name || `ルーム ${room.id}`}
-           </div>
-         ))
-       ) : (
-         <div style={{ padding: "0.5rem", color: "#888" }}>なし</div>
-       )}
-
+        <h3>グループチャット</h3>
+        {groupRooms.map(room => (
+          <div key={room.id} style={{ padding: "0.5rem", cursor: "pointer", background: roomId === room.id ? "#eee" : "" }}
+            onClick={async () => {
+              setSelectedUser(null);
+              setRoomId(room.id);
+              const res = await fetch(`http://localhost:8080/messages?room_id=${room.id}`, { credentials: "include" });
+              const data = await res.json();
+              setMessages(data || []);
+            }}>
+            {room.room_name || `ルーム ${room.id}`}
+          </div>
+        ))}
         <h3 style={{ marginTop: "1rem" }}>ユーザー一覧</h3>
         {users.map(user => (
           <div key={user.id} style={{ padding: "0.5rem", cursor: "pointer", background: selectedUser?.id === user.id ? "#eee" : "" }}
@@ -197,26 +258,19 @@ export default function ChatPage() {
         ))}
       </div>
 
-      {/* メイン画面 */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-        {/* ログアウトボタン */}
         <div style={{ padding: "1rem", textAlign: "right" }}>
           <button onClick={handleLogout} style={{ backgroundColor: "#e74c3c", color: "white", padding: "0.5rem 1rem", border: "none", borderRadius: "4px", cursor: "pointer" }}>
             ログアウト
           </button>
         </div>
 
-        {/* チャット */}
         <div style={{ padding: "1rem", flex: 1 }}>
           {roomId ? (
             <>
               <h3>{selectedUser ? `${selectedUser.username} とのチャット` : "グループチャット"}</h3>
               <div style={{ height: "300px", overflowY: "scroll", display: "flex", flexDirection: "column", border: "1px solid #ccc", marginBottom: "1rem", padding: "0.5rem" }}>
-                {messages.map((msg, i) => (
-                  <div key={i} className={`${styles.message} ${msg.sender_id === userId ? styles.myMessage : styles.otherMessage}`}>
-                    {msg.sender_id === userId ? "自分" : "相手"}: {msg.content}
-                  </div>
-                ))}
+                {renderMessages()}
                 <div ref={messageEndRef}></div>
               </div>
               <input

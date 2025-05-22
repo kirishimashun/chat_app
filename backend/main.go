@@ -36,6 +36,9 @@ func main() {
 	// 🌐 WebSocket
 	r.HandleFunc("/ws", handlers.HandleWebSocket)
 
+	// 既読処理エンドポイント追加
+	r.HandleFunc("/api/mark_as_read", handlers.MarkMessageAsRead).Methods("POST")
+
 	// CORS設定
 	handler := cors.New(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:3001"},

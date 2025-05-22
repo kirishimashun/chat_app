@@ -55,14 +55,15 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 	for {
 		var msg models.Message
 
+		// メッセージを受信
 		if err := conn.ReadJSON(&msg); err != nil {
-			log.Println("websocketの接続終了:", err)
+			log.Println("WebSocketの接続終了:", err)
 			break
 		}
 
-		log.Printf("📨 受信: %d → %d / %s", msg.SenderID, msg.ReceiverID, msg.Content)
+		log.Printf("📨 受信: %d → %s", msg.SenderID, msg.Content)
 
-		// メッセージをDBに保存（receiver_idは保存しない）
+		// メッセージをDBに保存
 		query := `
 			INSERT INTO messages (room_id, sender_id, content)
 			VALUES ($1, $2, $3)
@@ -75,14 +76,29 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 			continue
 		}
 
-		// 相手（receiver_id）が接続していれば中継
+		// メッセージ送信時に未読データを挿入
+		err = models.InsertMessageReads(db.Conn, msg.ID, msg.RoomID)
+		if err != nil {
+			log.Println("❌ 未読メッセージの挿入失敗:", err)
+		}
+
+		// room_idに参加している全メンバーにメッセージを送信
 		clientsMu.Lock()
-		receiverConn, ok := clients[msg.ReceiverID]
+		// `room_id`に基づいて全メンバーを取得するロジックを追加
+		members, err := models.GetRoomMembers(db.Conn, msg.RoomID)
 		clientsMu.Unlock()
 
-		if ok {
-			if err := receiverConn.WriteJSON(msg); err != nil {
-				log.Println("⚠️ 送信エラー:", err)
+		if err != nil {
+			log.Println("❌ ルームメンバー取得失敗:", err)
+			continue
+		}
+
+		for _, member := range members {
+			receiverConn, ok := clients[member.ID]
+			if ok {
+				if err := receiverConn.WriteJSON(msg); err != nil {
+					log.Println("⚠️ 送信エラー:", err)
+				}
 			}
 		}
 	}
