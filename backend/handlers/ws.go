@@ -68,7 +68,6 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 
 		switch msgType {
 		case "message":
-			// "message" のときのみ処理
 			var msg models.Message
 			rawBytes, _ := json.Marshal(raw)
 			if err := json.Unmarshal(rawBytes, &msg); err != nil {
@@ -78,7 +77,6 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 
 			log.Printf("📨 受信: %d → %s", msg.SenderID, msg.Content)
 
-			// DB保存
 			query := `
 				INSERT INTO messages (room_id, sender_id, content)
 				VALUES ($1, $2, $3)
@@ -91,13 +89,11 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 				continue
 			}
 
-			// 未読データ登録
 			err = models.InsertMessageReads(db.Conn, msg.ID, msg.RoomID)
 			if err != nil {
 				log.Println("❌ 未読挿入失敗:", err)
 			}
 
-			// メンバーに送信
 			members, err := models.GetRoomMembers(db.Conn, msg.RoomID)
 			if err != nil {
 				log.Println("❌ ルームメンバー取得失敗:", err)
@@ -121,6 +117,31 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 			}
 			clientsMu.Unlock()
 
+		case "read":
+			messageIDFloat, ok1 := raw["message_id"].(float64)
+			readAtStr, ok2 := raw["read_at"].(string)
+			if !ok1 || !ok2 {
+				log.Println("⚠️ read メッセージ形式エラー:", raw)
+				continue
+			}
+			messageID := int(messageIDFloat)
+			log.Printf("📩 read 受信: userID=%d messageID=%d read_at=%s", userID, messageID, readAtStr)
+
+			senderID, err := models.GetSenderIDByMessageID(db.Conn, messageID)
+			if err != nil {
+				log.Printf("❌ senderID取得失敗: messageID=%d err=%v", messageID, err)
+				continue
+			}
+			if senderID == userID {
+				continue
+			}
+
+			NotifyUser(senderID, map[string]interface{}{
+				"type":       "read",
+				"message_id": messageID,
+				"read_at":    readAtStr,
+			})
+
 		default:
 			log.Println("⚠️ 未対応のメッセージtype:", msgType)
 		}
@@ -129,11 +150,9 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 
 // 特定ユーザーにWebSocketで通知
 func NotifyUser(userID int, payload interface{}) {
+	log.Printf("📡 NotifyUser呼び出し: userID=%d payload=%v", userID, payload)
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
-
-	// ログ追加：通知しようとしている内容
-	log.Printf("📡 NotifyUser呼び出し: userID=%d payload=%v", userID, payload)
 
 	if conn, ok := clients[userID]; ok {
 		if err := conn.WriteJSON(payload); err != nil {

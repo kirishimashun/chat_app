@@ -197,50 +197,30 @@ func MarkAllAsRead(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("📥 既読リクエスト: userID=%d roomID=%d", userID, payload.RoomID)
 
-	// 未読のものだけ read_at を更新し、更新したメッセージIDとread_atを取得
-	rows, err := db.Conn.Query(`
-		UPDATE message_reads
-		SET read_at = NOW()
-		WHERE user_id = $1
-		  AND read_at IS NULL
-		  AND message_id IN (
-			  SELECT id FROM messages
-			  WHERE room_id = $2 AND sender_id != $1
-		  )
-		RETURNING message_id, read_at
-	`, userID, payload.RoomID)
-
+	// 🔄 models.MarkAllMessagesAsRead を使って read_at を更新し、更新した message_id と read_at を取得
+	updated, err := models.MarkAllMessagesAsRead(db.Conn, payload.RoomID, userID)
 	if err != nil {
-		log.Printf("❌ 既読UPDATE失敗: %v", err)
+		log.Printf("❌ MarkAllMessagesAsRead 失敗: %v", err)
 		http.Error(w, `{"error": "DB update failed"}`, http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var messageID int
-		var readAt time.Time
-
-		if err := rows.Scan(&messageID, &readAt); err != nil {
-			log.Printf("❌ rows.Scan失敗: %v", err)
-			continue
-		}
-
-		// メッセージの送信者を取得
-		var senderID int
-		err := db.Conn.QueryRow(`SELECT sender_id FROM messages WHERE id = $1`, messageID).Scan(&senderID)
+	// 各メッセージIDに対して送信者を取得して NotifyUser
+	for _, record := range updated {
+		senderID, err := models.GetSenderIDByMessageID(db.Conn, record.ID)
 		if err != nil {
-			log.Printf("❌ sender_id取得失敗: message_id=%d err=%v", messageID, err)
+			log.Printf("❌ sender_id取得失敗: message_id=%d err=%v", record.ID, err)
 			continue
 		}
-
-		// 相手にWebSocketで既読通知
+		if senderID == userID {
+			continue
+		}
 		NotifyUser(senderID, map[string]interface{}{
 			"type":       "read",
-			"message_id": messageID,
-			"read_at":    readAt.Format(time.RFC3339),
+			"message_id": record.ID,
+			"read_at":    record.ReadAt.Format(time.RFC3339),
 		})
-		log.Printf("📡 既読通知: message_id=%d → sender_id=%d", messageID, senderID)
+		log.Printf("📡 既読通知: message_id=%d → sender_id=%d", record.ID, senderID)
 	}
 
 	w.WriteHeader(http.StatusOK)
