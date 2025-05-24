@@ -187,7 +187,8 @@ func MarkAllAsRead(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payload struct {
-		RoomID int `json:"room_id"`
+		RoomID    int `json:"room_id"`
+		MessageID int `json:"message_id"` // 👈 単一メッセージ既読対応
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, `{"error": "Invalid request body"}`, http.StatusBadRequest)
@@ -195,9 +196,40 @@ func MarkAllAsRead(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
+	// ✅ 単一メッセージ既読（message_id 優先）
+	if payload.MessageID != 0 {
+		log.Printf("📥 単一メッセージ既読リクエスト: userID=%d messageID=%d", userID, payload.MessageID)
+
+		_, err := db.Conn.Exec(`
+			UPDATE message_reads
+			SET read_at = NOW()
+			WHERE message_id = $1 AND user_id = $2 AND read_at IS NULL
+		`, payload.MessageID, userID)
+		if err != nil {
+			log.Printf("❌ 単一既読UPDATE失敗: %v", err)
+			http.Error(w, `{"error": "DB update failed"}`, http.StatusInternalServerError)
+			return
+		}
+
+		// 通知送信
+		senderID, err := models.GetSenderIDByMessageID(db.Conn, payload.MessageID)
+		if err == nil && senderID != userID {
+			readAt := time.Now().Format(time.RFC3339)
+			NotifyUser(senderID, map[string]interface{}{
+				"type":       "read",
+				"message_id": payload.MessageID,
+				"read_at":    readAt,
+			})
+			log.Printf("📡 既読通知: message_id=%d → sender_id=%d", payload.MessageID, senderID)
+		}
+
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// ✅ 既存の room_id による一括既読処理
 	log.Printf("📥 既読リクエスト: userID=%d roomID=%d", userID, payload.RoomID)
 
-	// 🔄 models.MarkAllMessagesAsRead を使って read_at を更新し、更新した message_id と read_at を取得
 	updated, err := models.MarkAllMessagesAsRead(db.Conn, payload.RoomID, userID)
 	if err != nil {
 		log.Printf("❌ MarkAllMessagesAsRead 失敗: %v", err)
@@ -205,7 +237,6 @@ func MarkAllAsRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 各メッセージIDに対して送信者を取得して NotifyUser
 	for _, record := range updated {
 		senderID, err := models.GetSenderIDByMessageID(db.Conn, record.ID)
 		if err != nil {

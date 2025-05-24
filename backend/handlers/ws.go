@@ -102,15 +102,17 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 
 			clientsMu.Lock()
 			for _, member := range members {
+				// ✅ 自分も含めて全員に送信
 				if conn, ok := clients[member.ID]; ok {
-					if err := conn.WriteJSON(map[string]interface{}{
+					err := conn.WriteJSON(map[string]interface{}{
 						"type":      "message",
 						"id":        msg.ID,
 						"room_id":   msg.RoomID,
 						"sender_id": msg.SenderID,
 						"content":   msg.Content,
 						"timestamp": msg.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
-					}); err != nil {
+					})
+					if err != nil {
 						log.Println("⚠️ メッセージ送信エラー:", err)
 					}
 				}

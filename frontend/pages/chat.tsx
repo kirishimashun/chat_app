@@ -3,7 +3,7 @@ import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 
 type User = { id: number; username: string };
-type Message = { sender_id: number; content: string; read_at?: string | null; id: number };
+type Message = { id: number; room_id: number; sender_id: number; content: string; read_at?: string | null };
 type RoomInfo = { id: number; room_name: string; is_group: boolean };
 
 export default function ChatPage() {
@@ -30,6 +30,20 @@ export default function ChatPage() {
       console.error("❌ markAllAsRead error:", err);
     }
   };
+
+  const markSingleAsRead = async (messageId: number) => {
+  try {
+    await fetch("http://localhost:8080/messages/read", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message_id: messageId }),
+    });
+  } catch (err) {
+    console.error("❌ markSingleAsRead error:", err);
+  }
+};
+
 
   const restoreLastUser = async (users: User[]) => {
     const lastId = localStorage.getItem(`lastSelectedUserId_user${userId}`);
@@ -64,20 +78,46 @@ export default function ChatPage() {
     ws.onclose = () => console.warn("WebSocket closed");
     ws.onerror = err => console.error("WebSocket error", err);
 
-    ws.onmessage = async (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === "message") {
-        const res = await fetch(`http://localhost:8080/messages?room_id=${roomId}`, { credentials: "include" });
-        const msgs: Message[] = await res.json();
-        setMessages(msgs);
-        await markAllAsRead(roomId);
-      } else if (data.type === "read") {
-        const id = Number(data.message_id);
-        if (!isNaN(id)) {
-          setMessages(prev => prev.map(m => m.id === id ? { ...m, read_at: data.read_at } : m));
-        }
-      }
+ws.onmessage = async (event) => {
+  const data = JSON.parse(event.data);
+  console.log("💬 WebSocket 受信:", data);
+
+  if (data.type === "message") {
+    console.log("🧪 受信メッセージ:", data);
+
+    if (typeof data.id !== "number" || typeof data.sender_id !== "number") {
+      console.warn("⚠️ 不正なmessageを受信:", data);
+      return;
+    }
+
+    const msg: Message = {
+      id: data.id,
+      room_id: data.room_id ?? roomId!,
+      sender_id: data.sender_id,
+      content: data.content,
+      read_at: data.read_at ?? null,
     };
+
+    setMessages(prev => [...prev, msg]);
+
+    const isFromOtherUser = msg.sender_id !== userId;
+    const isCurrentRoom = msg.room_id === roomId;
+
+    if (isFromOtherUser && isCurrentRoom) {
+      markSingleAsRead(msg.id);
+    }
+  } else if (data.type === "read") {
+    console.log("📩 read受信:", data);
+
+    const id = Number(data.message_id);
+    if (!isNaN(id)) {
+      setMessages(prev =>
+        prev.map(m => m.id === id ? { ...m, read_at: data.read_at } : m)
+      );
+    }
+  }
+};
+
 
     return () => ws.close();
   }, [userId, roomId]);
@@ -99,19 +139,21 @@ export default function ChatPage() {
       .then(data => Array.isArray(data) ? setGroupRooms(data) : setGroupRooms([]));
   }, [userId]);
 
-  const handleSendMessage = async () => {
-    if (!messageText.trim() || userId == null || roomId == null || !socket) return;
-    const msg = {
-      type: "message",
-      sender_id: userId,
-      receiver_id: selectedUser?.id,
-      room_id: roomId,
-      content: messageText.trim(),
-    };
-    socket.send(JSON.stringify(msg));
-    setMessages(prev => [...prev, { sender_id: userId, content: messageText, id: Date.now() }]);
-    setMessageText("");
+const handleSendMessage = async () => {
+  if (!messageText.trim() || userId == null || roomId == null || !socket) return;
+
+  const msg = {
+    type: "message",
+    sender_id: userId,
+    receiver_id: selectedUser?.id,
+    room_id: roomId,
+    content: messageText.trim(),
   };
+
+  socket.send(JSON.stringify(msg)); // ← WebSocket送信だけでOK
+  setMessageText("");              // ← 自分で setMessages は不要にできる
+};
+
 
   const handleUserClick = async (user: User) => {
     setSelectedUser(user);
@@ -126,29 +168,37 @@ export default function ChatPage() {
   };
 
   const renderMessages = () => {
-    return messages.map((msg, i) => {
-      const isMyMessage = msg.sender_id === userId;
-      const isReadByOther = isMyMessage && msg.read_at;
-      return (
-        <div key={i} style={{ display: "flex", justifyContent: isMyMessage ? "flex-end" : "flex-start", marginBottom: "8px" }}>
-          {isMyMessage ? (
-            <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-end" }}>
-              {isReadByOther && (
-                <span style={{ fontSize: "0.75rem", color: "gray", marginRight: "4px" }}>既読</span>
-              )}
-              <div style={{ backgroundColor: "#dff0ff", padding: "0.5rem 0.8rem", borderRadius: "1rem", maxWidth: "70%" }}>
-                自分: {msg.content}
-              </div>
+  return messages.map((msg, i) => {
+    // ⚠️ 不正なメッセージオブジェクトをスキップ
+    if (!msg || typeof msg.sender_id !== "number") {
+      console.warn("⚠️ renderMessages内で不正なmsg:", msg);
+      return null;
+    }
+
+    const isMyMessage = msg.sender_id === userId;
+    const isReadByOther = isMyMessage && msg.read_at;
+
+    return (
+      <div key={i} style={{ display: "flex", justifyContent: isMyMessage ? "flex-end" : "flex-start", marginBottom: "8px" }}>
+        {isMyMessage ? (
+          <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-end" }}>
+            {isReadByOther && (
+              <span style={{ fontSize: "0.75rem", color: "gray", marginRight: "4px" }}>既読</span>
+            )}
+            <div style={{ backgroundColor: "#dff0ff", padding: "0.5rem 0.8rem", borderRadius: "1rem", maxWidth: "70%" }}>
+              自分: {msg.content}
             </div>
-          ) : (
-            <div style={{ backgroundColor: "#f1f1f1", padding: "0.5rem 0.8rem", borderRadius: "1rem", maxWidth: "70%" }}>
-              相手: {msg.content}
-            </div>
-          )}
-        </div>
-      );
-    });
-  };
+          </div>
+        ) : (
+          <div style={{ backgroundColor: "#f1f1f1", padding: "0.5rem 0.8rem", borderRadius: "1rem", maxWidth: "70%" }}>
+            相手: {msg.content}
+          </div>
+        )}
+      </div>
+    );
+  });
+};
+
 
   useEffect(() => {
     if (messageEndRef.current) messageEndRef.current.scrollIntoView({ behavior: "smooth" });
