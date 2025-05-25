@@ -33,31 +33,18 @@ func MarkMessageAsRead(w http.ResponseWriter, r *http.Request) {
 
 	readAt := time.Now()
 
-	// Try to update first
-	res, err := db.Conn.Exec(`
-		UPDATE message_reads SET read_at = $1
-		WHERE message_id = $2 AND user_id = $3
-	`, readAt, messageID, userID)
+	// ✅ UPSERT処理（INSERTまたはUPDATE）
+	_, err = db.Conn.Exec(`
+		INSERT INTO message_reads (message_id, user_id, read_at)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (message_id, user_id)
+		DO UPDATE SET read_at = EXCLUDED.read_at
+	`, messageID, userID, readAt)
 	if err != nil {
-		http.Error(w, `{"error": "DB update error: `+err.Error()+`"}`, http.StatusInternalServerError)
+		http.Error(w, `{"error": "DB upsert error: `+err.Error()+`"}`, http.StatusInternalServerError)
 		return
 	}
-
-	numRows, _ := res.RowsAffected()
-	if numRows == 0 {
-		// If no rows updated, insert new entry
-		_, err = db.Conn.Exec(`
-			INSERT INTO message_reads (message_id, user_id, read_at)
-			VALUES ($1, $2, $3)
-		`, messageID, userID, readAt)
-		if err != nil {
-			http.Error(w, `{"error": "DB insert error: `+err.Error()+`"}`, http.StatusInternalServerError)
-			return
-		}
-		log.Printf("✅ INSERT read_at: message_id=%d user_id=%d", messageID, userID)
-	} else {
-		log.Printf("✅ UPDATE read_at: message_id=%d user_id=%d", messageID, userID)
-	}
+	log.Printf("✅ UPSERT read_at: message_id=%d user_id=%d", messageID, userID)
 
 	// Notify sender
 	var senderID int

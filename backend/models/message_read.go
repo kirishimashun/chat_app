@@ -28,9 +28,10 @@ func InsertMessageReads(db *sql.DB, messageID int, roomID int) error {
 
 	for _, member := range members {
 		_, err := db.Exec(
-			"INSERT INTO message_reads (message_id, user_id, read_at) VALUES ($1, $2, NULL)",
+			"INSERT INTO message_reads (message_id, user_id, read_at) VALUES ($1, $2, NULL) ON CONFLICT (message_id, user_id) DO NOTHING",
 			messageID, member.ID,
 		)
+
 		if err != nil {
 			return fmt.Errorf("error inserting unread message: %v", err)
 		}
@@ -50,14 +51,15 @@ func MarkMessageAsRead(db *sql.DB, messageID int, userID int) error {
 // 全メッセージを既読にし、更新されたmessage_idとread_atを返す
 func MarkAllMessagesAsRead(db *sql.DB, roomID int, userID int) ([]ReadUpdate, error) {
 	rows, err := db.Query(`
-		UPDATE message_reads
+		UPDATE message_reads mr
 		SET read_at = NOW()
-		WHERE message_id IN (
-			SELECT m.id FROM messages m
-			WHERE m.room_id = $1 AND m.sender_id != $2
-		)
-		AND user_id = $2 AND read_at IS NULL
-		RETURNING message_id, read_at
+		FROM messages m
+		WHERE mr.message_id = m.id
+		  AND m.room_id = $1
+		  AND m.sender_id != $2
+		  AND mr.user_id = $2
+		  AND mr.read_at IS NULL
+		RETURNING mr.message_id, mr.read_at
 	`, roomID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("error marking messages as read: %v", err)

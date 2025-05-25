@@ -49,13 +49,11 @@ func SendMessage(w http.ResponseWriter, r *http.Request) {
 	msg.RoomID = roomID
 	msg.Content = req.Content
 
-	// 🔽 メッセージを保存
 	err = db.Conn.QueryRow(`
 		INSERT INTO messages (sender_id, room_id, content, created_at)
 		VALUES ($1, $2, $3, NOW())
 		RETURNING id, created_at
 	`, msg.SenderID, msg.RoomID, msg.Content).Scan(&msg.ID, &msg.Timestamp)
-
 	if err != nil {
 		log.Println("❌ メッセージ保存失敗:", err)
 		http.Error(w, `{"error": "保存失敗"}`, http.StatusInternalServerError)
@@ -63,7 +61,6 @@ func SendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("✅ メッセージ保存成功: messageID=%d", msg.ID)
 
-	// 🔽 ルームメンバーに未読データ挿入（自分自身含む）
 	err = models.InsertMessageReads(db.Conn, msg.ID, msg.RoomID)
 	if err != nil {
 		log.Printf("⚠️ message_reads 挿入エラー: %v", err)
@@ -95,7 +92,6 @@ func GetMessages(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("📥 メッセージ取得: roomID=%d", roomID)
 
-	// ✅ 既読処理：他人が送った未読メッセージを read_at = NOW() に更新
 	_, err = db.Conn.Exec(`
 		UPDATE message_reads
 		SET read_at = NOW()
@@ -109,7 +105,6 @@ func GetMessages(w http.ResponseWriter, r *http.Request) {
 		log.Println("❌ 既読UPDATE失敗:", err)
 	}
 
-	// ✅ 今既読にしたメッセージを取得し、通知
 	rowsNotify, err := db.Conn.Query(`
 		SELECT m.id, m.sender_id, mr.read_at
 		FROM messages m
@@ -119,7 +114,6 @@ func GetMessages(w http.ResponseWriter, r *http.Request) {
 		  AND m.sender_id != $2
 		  AND mr.read_at > NOW() - INTERVAL '10 seconds'
 	`, roomID, userID)
-
 	if err == nil {
 		defer rowsNotify.Close()
 		for rowsNotify.Next() {
@@ -138,15 +132,14 @@ func GetMessages(w http.ResponseWriter, r *http.Request) {
 		log.Println("❌ 既読通知SELECT失敗:", err)
 	}
 
-	// ✅ メッセージ本体を取得（read_at含む）
 	rows, err := db.Conn.Query(`
-		SELECT m.id, m.room_id, m.sender_id, m.content, m.created_at, mr.read_at
-		FROM messages m
-		LEFT JOIN message_reads mr
-			ON m.id = mr.message_id AND mr.user_id = $2
-		WHERE m.room_id = $1
-		ORDER BY m.created_at ASC
-	`, roomID, userID)
+	SELECT m.id, m.room_id, m.sender_id, m.content, m.created_at, mr.read_at
+	FROM messages m
+	LEFT JOIN message_reads mr
+		ON m.id = mr.message_id AND mr.user_id != $2
+	WHERE m.room_id = $1
+	ORDER BY m.created_at ASC
+`, roomID, userID)
 
 	if err != nil {
 		log.Println("❌ メッセージSELECT失敗:", err)
@@ -161,7 +154,7 @@ func GetMessages(w http.ResponseWriter, r *http.Request) {
 		SenderID  int        `json:"sender_id"`
 		Content   string     `json:"content"`
 		Timestamp time.Time  `json:"timestamp"`
-		ReadAt    *time.Time `json:"read_at,omitempty"`
+		ReadAt    *time.Time `json:"read_at"`
 	}
 
 	messages := make([]MessageWithRead, 0)
@@ -188,7 +181,7 @@ func MarkAllAsRead(w http.ResponseWriter, r *http.Request) {
 
 	var payload struct {
 		RoomID    int `json:"room_id"`
-		MessageID int `json:"message_id"` // 👈 単一メッセージ既読対応
+		MessageID int `json:"message_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, `{"error": "Invalid request body"}`, http.StatusBadRequest)
@@ -196,10 +189,8 @@ func MarkAllAsRead(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// ✅ 単一メッセージ既読（message_id 優先）
 	if payload.MessageID != 0 {
 		log.Printf("📥 単一メッセージ既読リクエスト: userID=%d messageID=%d", userID, payload.MessageID)
-
 		_, err := db.Conn.Exec(`
 			UPDATE message_reads
 			SET read_at = NOW()
@@ -211,7 +202,6 @@ func MarkAllAsRead(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 通知送信
 		senderID, err := models.GetSenderIDByMessageID(db.Conn, payload.MessageID)
 		if err == nil && senderID != userID {
 			readAt := time.Now().Format(time.RFC3339)
@@ -227,7 +217,6 @@ func MarkAllAsRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ✅ 既存の room_id による一括既読処理
 	log.Printf("📥 既読リクエスト: userID=%d roomID=%d", userID, payload.RoomID)
 
 	updated, err := models.MarkAllMessagesAsRead(db.Conn, payload.RoomID, userID)
@@ -236,6 +225,8 @@ func MarkAllAsRead(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "DB update failed"}`, http.StatusInternalServerError)
 		return
 	}
+
+	log.Printf("📦 updated: %+v", updated) // ←★ これを追加
 
 	for _, record := range updated {
 		senderID, err := models.GetSenderIDByMessageID(db.Conn, record.ID)

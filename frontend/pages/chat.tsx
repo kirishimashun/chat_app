@@ -1,3 +1,4 @@
+// chat.tsx の修正済みコード（全文）
 "use client";
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
@@ -32,17 +33,40 @@ export default function ChatPage() {
   };
 
   const markSingleAsRead = async (messageId: number) => {
-  try {
-    await fetch("http://localhost:8080/messages/read", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message_id: messageId }),
-    });
-  } catch (err) {
-    console.error("❌ markSingleAsRead error:", err);
+    try {
+      await fetch("http://localhost:8080/messages/read", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message_id: messageId }),
+      });
+    } catch (err) {
+      console.error("❌ markSingleAsRead error:", err);
+    }
+  };
+
+  const openRoomAndRead = async (targetRoomId: number) => {
+  setRoomId(targetRoomId);
+  await markAllAsRead(targetRoomId);
+  const res = await fetch(`http://localhost:8080/messages?room_id=${targetRoomId}`, {
+    credentials: "include",
+  });
+
+  const data = await res.json();
+  console.log("📩 openRoomAndRead で受け取った data:", data);
+
+  if (Array.isArray(data)) {
+    // バックエンドが配列を直接返す場合
+    setMessages(data);
+  } else if (Array.isArray(data.messages)) {
+    // バックエンドが { messages: [...] } の形式で返す場合
+    setMessages(data.messages);
+  } else {
+    console.error("❌ 不正な形式のmessagesレスポンス:", data);
+    setMessages([]);
   }
 };
+
 
 
   const restoreLastUser = async (users: User[]) => {
@@ -53,11 +77,7 @@ export default function ChatPage() {
     setSelectedUser(found);
     const res = await fetch(`http://localhost:8080/room?user_id=${found.id}`, { credentials: "include" });
     const { room_id } = await res.json();
-    setRoomId(room_id);
-    const msgRes = await fetch(`http://localhost:8080/messages?room_id=${room_id}`, { credentials: "include" });
-    const msgs: Message[] = await msgRes.json();
-    setMessages(msgs);
-    await markAllAsRead(room_id);
+    await openRoomAndRead(room_id);
   };
 
   useEffect(() => {
@@ -69,56 +89,35 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!userId || !roomId) return;
-
     const ws = new WebSocket("ws://localhost:8080/ws");
     ws.onopen = async () => {
       setSocket(ws);
       await markAllAsRead(roomId);
     };
+    ws.onmessage = async (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === "message") {
+        if (typeof data.id !== "number" || typeof data.sender_id !== "number") return;
+        const msg: Message = {
+          id: data.id,
+          room_id: data.room_id ?? roomId!,
+          sender_id: data.sender_id,
+          content: data.content,
+          read_at: data.read_at ?? null,
+        };
+        if (msg.room_id !== roomId) return;
+        setMessages(prev => [...prev, msg]);
+        const isFromOtherUser = msg.sender_id !== userId;
+        if (isFromOtherUser) markSingleAsRead(msg.id);
+      } else if (data.type === "read") {
+        const id = Number(data.message_id);
+        if (!isNaN(id)) {
+          setMessages(prev => prev.map(m => m.id === id ? { ...m, read_at: data.read_at } : m));
+        }
+      }
+    };
     ws.onclose = () => console.warn("WebSocket closed");
     ws.onerror = err => console.error("WebSocket error", err);
-
-ws.onmessage = async (event) => {
-  const data = JSON.parse(event.data);
-  console.log("💬 WebSocket 受信:", data);
-
-  if (data.type === "message") {
-    console.log("🧪 受信メッセージ:", data);
-
-    if (typeof data.id !== "number" || typeof data.sender_id !== "number") {
-      console.warn("⚠️ 不正なmessageを受信:", data);
-      return;
-    }
-
-    const msg: Message = {
-      id: data.id,
-      room_id: data.room_id ?? roomId!,
-      sender_id: data.sender_id,
-      content: data.content,
-      read_at: data.read_at ?? null,
-    };
-
-    setMessages(prev => [...prev, msg]);
-
-    const isFromOtherUser = msg.sender_id !== userId;
-    const isCurrentRoom = msg.room_id === roomId;
-
-    if (isFromOtherUser && isCurrentRoom) {
-      markSingleAsRead(msg.id);
-    }
-  } else if (data.type === "read") {
-    console.log("📩 read受信:", data);
-
-    const id = Number(data.message_id);
-    if (!isNaN(id)) {
-      setMessages(prev =>
-        prev.map(m => m.id === id ? { ...m, read_at: data.read_at } : m)
-      );
-    }
-  }
-};
-
-
     return () => ws.close();
   }, [userId, roomId]);
 
@@ -139,44 +138,31 @@ ws.onmessage = async (event) => {
       .then(data => Array.isArray(data) ? setGroupRooms(data) : setGroupRooms([]));
   }, [userId]);
 
-const handleSendMessage = async () => {
-  if (!messageText.trim() || userId == null || roomId == null || !socket) return;
-
-  const msg = {
-    type: "message",
-    sender_id: userId,
-    receiver_id: selectedUser?.id,
-    room_id: roomId,
-    content: messageText.trim(),
+  const handleSendMessage = async () => {
+    if (!messageText.trim() || userId == null || roomId == null || !socket) return;
+    const msg = {
+      type: "message",
+      sender_id: userId,
+      receiver_id: selectedUser?.id,
+      room_id: roomId,
+      content: messageText.trim(),
+    };
+    socket.send(JSON.stringify(msg));
+    setMessageText("");
   };
-
-  socket.send(JSON.stringify(msg)); // ← WebSocket送信だけでOK
-  setMessageText("");              // ← 自分で setMessages は不要にできる
-};
-
 
   const handleUserClick = async (user: User) => {
     setSelectedUser(user);
     localStorage.setItem(`lastSelectedUserId_user${userId}`, user.id.toString());
     const res = await fetch(`http://localhost:8080/room?user_id=${user.id}`, { credentials: "include" });
     const data = await res.json();
-    setRoomId(data.room_id);
-    const msgRes = await fetch(`http://localhost:8080/messages?room_id=${data.room_id}`, { credentials: "include" });
-    const msgs: Message[] = await msgRes.json();
-    setMessages(msgs);
-    await markAllAsRead(data.room_id);
+    await openRoomAndRead(data.room_id);
   };
 
-  const renderMessages = () => {
-  return messages.map((msg, i) => {
-    // ⚠️ 不正なメッセージオブジェクトをスキップ
-    if (!msg || typeof msg.sender_id !== "number") {
-      console.warn("⚠️ renderMessages内で不正なmsg:", msg);
-      return null;
-    }
-
+  const renderMessages = () => messages.map((msg, i) => {
     const isMyMessage = msg.sender_id === userId;
-    const isReadByOther = isMyMessage && msg.read_at;
+    const isReadByOther =
+  isMyMessage && typeof msg.read_at === "string" && msg.read_at !== "null";
 
     return (
       <div key={i} style={{ display: "flex", justifyContent: isMyMessage ? "flex-end" : "flex-start", marginBottom: "8px" }}>
@@ -197,8 +183,6 @@ const handleSendMessage = async () => {
       </div>
     );
   });
-};
-
 
   useEffect(() => {
     if (messageEndRef.current) messageEndRef.current.scrollIntoView({ behavior: "smooth" });
@@ -213,11 +197,7 @@ const handleSendMessage = async () => {
           <div key={room.id} style={{ padding: "0.5rem", cursor: "pointer", background: roomId === room.id ? "#eee" : "" }}
             onClick={async () => {
               setSelectedUser(null);
-              setRoomId(room.id);
-              const res = await fetch(`http://localhost:8080/messages?room_id=${room.id}`, { credentials: "include" });
-              const data = await res.json();
-              setMessages(data || []);
-              await markAllAsRead(room.id);
+              await openRoomAndRead(room.id);
             }}>{room.room_name || `ルーム ${room.id}`}</div>
         ))}
         <h3 style={{ marginTop: "1rem" }}>ユーザー一覧</h3>
