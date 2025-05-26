@@ -1,8 +1,10 @@
+// chat.tsx（画像送信機能復元済み・省略なし完全版）
 "use client";
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import EmojiPicker from "../components/EmojiPicker";
+import EmojiStampPicker from "../components/EmojiStampPicker";
 
+// 型定義
 type User = { id: number; username: string };
 type Message = { id: number; room_id: number; sender_id: number; content: string; read_at?: string | null };
 type RoomInfo = { id: number; room_name: string; is_group: boolean };
@@ -21,47 +23,22 @@ export default function ChatPage() {
   const router = useRouter();
   const messageEndRef = useRef<HTMLDivElement | null>(null);
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !socket || userId == null || roomId == null) return;
-    const formData = new FormData();
-    formData.append("image", file);
-    const res = await fetch("http://localhost:8080/upload", { method: "POST", body: formData });
-    const { url } = await res.json();
-    const msg = {
-      type: "message",
-      sender_id: userId,
-      receiver_id: selectedUser?.id,
-      room_id: roomId,
-      content: url
-    };
-    socket.send(JSON.stringify(msg));
-  };
-
   const markAllAsRead = async (roomId: number) => {
-    try {
-      await fetch("http://localhost:8080/messages/read", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ room_id: roomId })
-      });
-    } catch (err) {
-      console.error("❌ markAllAsRead error:", err);
-    }
+    await fetch("http://localhost:8080/messages/read", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ room_id: roomId })
+    });
   };
 
   const markSingleAsRead = async (messageId: number) => {
-    try {
-      await fetch("http://localhost:8080/messages/read", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message_id: messageId })
-      });
-    } catch (err) {
-      console.error("❌ markSingleAsRead error:", err);
-    }
+    await fetch("http://localhost:8080/messages/read", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message_id: messageId })
+    });
   };
 
   const openRoomAndRead = async (targetRoomId: number) => {
@@ -69,12 +46,7 @@ export default function ChatPage() {
     await markAllAsRead(targetRoomId);
     const res = await fetch(`http://localhost:8080/messages?room_id=${targetRoomId}`, { credentials: "include" });
     const data = await res.json();
-    if (Array.isArray(data)) setMessages(data);
-    else if (Array.isArray(data.messages)) setMessages(data.messages);
-    else {
-      console.error("❌ 不正な形式のmessagesレスポンス:", data);
-      setMessages([]);
-    }
+    setMessages(Array.isArray(data) ? data : data.messages || []);
     const memberRes = await fetch(`http://localhost:8080/room/members?room_id=${targetRoomId}`, { credentials: "include" });
     const memberData = await memberRes.json();
     setRoomMembers(Array.isArray(memberData) ? memberData : []);
@@ -108,7 +80,6 @@ export default function ChatPage() {
     ws.onmessage = async event => {
       const data = JSON.parse(event.data);
       if (data.type === "message") {
-        if (typeof data.id !== "number" || typeof data.sender_id !== "number") return;
         const msg: Message = {
           id: data.id,
           room_id: data.room_id ?? roomId!,
@@ -159,6 +130,23 @@ export default function ChatPage() {
     setMessageText("");
   };
 
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !socket || userId == null || roomId == null) return;
+    const formData = new FormData();
+    formData.append("image", file);
+    const res = await fetch("http://localhost:8080/upload", { method: "POST", body: formData });
+    const { url } = await res.json();
+    const msg = {
+      type: "message",
+      sender_id: userId,
+      receiver_id: selectedUser?.id,
+      room_id: roomId,
+      content: url
+    };
+    socket.send(JSON.stringify(msg));
+  };
+
   const handleUserClick = async (user: User) => {
     setSelectedUser(user);
     localStorage.setItem(`lastSelectedUserId_user${userId}`, user.id.toString());
@@ -169,10 +157,13 @@ export default function ChatPage() {
 
   const renderMessages = () => messages.map((msg, i) => {
     const isMyMessage = msg.sender_id === userId;
-    const isImage = msg.content.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|bmp|webp|svg)$/i);
     const isReadByOther = isMyMessage && typeof msg.read_at === "string" && msg.read_at !== "null";
+    const isImageLike =
+      msg.content.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|svg)$/i) ||
+      msg.content.includes("placehold.co") ||
+      msg.content.includes("placebear.com");
 
-    if (isImage) {
+    if (isImageLike) {
       return (
         <div key={i} style={{ display: "flex", justifyContent: isMyMessage ? "flex-end" : "flex-start", marginBottom: "8px" }}>
           <img
@@ -213,11 +204,13 @@ export default function ChatPage() {
         <button onClick={() => router.push("/group/create")} style={{ marginBottom: "1rem", padding: "0.4rem 0.6rem", backgroundColor: "#3498db", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}>＋ グループ作成</button>
         <h3>グループチャット</h3>
         {groupRooms.map(room => (
-          <div key={room.id} style={{ padding: "0.5rem", cursor: "pointer", background: roomId === room.id ? "#eee" : "" }} onClick={async () => { setSelectedUser(null); await openRoomAndRead(room.id); }}>{room.room_name || `ルーム ${room.id}`}</div>
+          <div key={room.id} style={{ padding: "0.5rem", cursor: "pointer", background: roomId === room.id ? "#eee" : "" }}
+            onClick={async () => { setSelectedUser(null); await openRoomAndRead(room.id); }}>{room.room_name || `ルーム ${room.id}`}</div>
         ))}
         <h3 style={{ marginTop: "1rem" }}>ユーザー一覧</h3>
         {users.map(user => (
-          <div key={user.id} style={{ padding: "0.5rem", cursor: "pointer", background: selectedUser?.id === user.id ? "#eee" : "" }} onClick={() => handleUserClick(user)}>{user.username}</div>
+          <div key={user.id} style={{ padding: "0.5rem", cursor: "pointer", background: selectedUser?.id === user.id ? "#eee" : "" }}
+            onClick={() => handleUserClick(user)}>{user.username}</div>
         ))}
       </div>
 
@@ -247,11 +240,22 @@ export default function ChatPage() {
                 <div ref={messageEndRef}></div>
               </div>
               <input type="file" accept="image/*" onChange={handleImageUpload} style={{ marginBottom: "0.5rem" }} />
-              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <EmojiPicker onSelect={(emoji) => setMessageText(prev => prev + emoji)} />
-                <input type="text" value={messageText} onChange={e => setMessageText(e.target.value)} style={{ flex: 1 }} placeholder="メッセージを入力" />
-                <button onClick={handleSendMessage}>送信</button>
-              </div>
+              <EmojiStampPicker
+                onEmojiSelect={(emoji) => setMessageText((prev) => prev + emoji)}
+                onStampSelect={(url) => {
+                  if (!socket || !userId || !roomId) return;
+                  const msg = {
+                    type: "message",
+                    sender_id: userId,
+                    receiver_id: selectedUser?.id,
+                    room_id: roomId,
+                    content: url,
+                  };
+                  socket.send(JSON.stringify(msg));
+                }}
+              />
+              <input type="text" value={messageText} onChange={e => setMessageText(e.target.value)} style={{ width: "80%" }} placeholder="メッセージを入力" />
+              <button onClick={handleSendMessage}>送信</button>
             </>
           ) : (
             <p>チャットルームを選択してください</p>
