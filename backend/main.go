@@ -34,6 +34,10 @@ func main() {
 	r.HandleFunc("/my-rooms", handlers.GetMyRooms).Methods("GET")
 	r.HandleFunc("/group_rooms", handlers.GetGroupRooms).Methods("GET")
 	r.HandleFunc("/messages/read", handlers.MarkAllAsRead).Methods("POST")
+	r.HandleFunc("/upload", handlers.UploadImage).Methods("POST")
+
+	// 静的ファイル配信（画像URLアクセス用）
+	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./uploads"))))
 
 	// 🌐 WebSocket
 	r.HandleFunc("/ws", handlers.HandleWebSocket)

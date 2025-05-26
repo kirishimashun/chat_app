@@ -16,8 +16,26 @@ export default function ChatPage() {
   const [roomMembers, setRoomMembers] = useState<User[]>([]);
   const [socket, setSocket] = useState<WebSocket | null>(null);
   const [groupRooms, setGroupRooms] = useState<RoomInfo[]>([]);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const router = useRouter();
   const messageEndRef = useRef<HTMLDivElement | null>(null);
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !socket || userId == null || roomId == null) return;
+    const formData = new FormData();
+    formData.append("image", file);
+    const res = await fetch("http://localhost:8080/upload", { method: "POST", body: formData });
+    const { url } = await res.json();
+    const msg = {
+      type: "message",
+      sender_id: userId,
+      receiver_id: selectedUser?.id,
+      room_id: roomId,
+      content: url
+    };
+    socket.send(JSON.stringify(msg));
+  };
 
   const markAllAsRead = async (roomId: number) => {
     try {
@@ -25,7 +43,7 @@ export default function ChatPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ room_id: roomId }),
+        body: JSON.stringify({ room_id: roomId })
       });
     } catch (err) {
       console.error("❌ markAllAsRead error:", err);
@@ -38,7 +56,7 @@ export default function ChatPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message_id: messageId }),
+        body: JSON.stringify({ message_id: messageId })
       });
     } catch (err) {
       console.error("❌ markSingleAsRead error:", err);
@@ -48,25 +66,15 @@ export default function ChatPage() {
   const openRoomAndRead = async (targetRoomId: number) => {
     setRoomId(targetRoomId);
     await markAllAsRead(targetRoomId);
-
-    const res = await fetch(`http://localhost:8080/messages?room_id=${targetRoomId}`, {
-      credentials: "include",
-    });
+    const res = await fetch(`http://localhost:8080/messages?room_id=${targetRoomId}`, { credentials: "include" });
     const data = await res.json();
-
-    if (Array.isArray(data)) {
-      setMessages(data);
-    } else if (Array.isArray(data.messages)) {
-      setMessages(data.messages);
-    } else {
+    if (Array.isArray(data)) setMessages(data);
+    else if (Array.isArray(data.messages)) setMessages(data.messages);
+    else {
       console.error("❌ 不正な形式のmessagesレスポンス:", data);
       setMessages([]);
     }
-
-    // 🎯 メンバー一覧取得
-    const memberRes = await fetch(`http://localhost:8080/room/members?room_id=${targetRoomId}`, {
-      credentials: "include",
-    });
+    const memberRes = await fetch(`http://localhost:8080/room/members?room_id=${targetRoomId}`, { credentials: "include" });
     const memberData = await memberRes.json();
     setRoomMembers(Array.isArray(memberData) ? memberData : []);
   };
@@ -74,7 +82,7 @@ export default function ChatPage() {
   const restoreLastUser = async (users: User[]) => {
     const lastId = localStorage.getItem(`lastSelectedUserId_user${userId}`);
     if (!lastId) return;
-    const found = users.find((u) => u.id === Number(lastId));
+    const found = users.find(u => u.id === Number(lastId));
     if (!found) return;
     setSelectedUser(found);
     const res = await fetch(`http://localhost:8080/room?user_id=${found.id}`, { credentials: "include" });
@@ -96,7 +104,7 @@ export default function ChatPage() {
       setSocket(ws);
       await markAllAsRead(roomId);
     };
-    ws.onmessage = async (event) => {
+    ws.onmessage = async event => {
       const data = JSON.parse(event.data);
       if (data.type === "message") {
         if (typeof data.id !== "number" || typeof data.sender_id !== "number") return;
@@ -105,17 +113,14 @@ export default function ChatPage() {
           room_id: data.room_id ?? roomId!,
           sender_id: data.sender_id,
           content: data.content,
-          read_at: data.read_at ?? null,
+          read_at: data.read_at ?? null
         };
         if (msg.room_id !== roomId) return;
         setMessages(prev => [...prev, msg]);
-        const isFromOtherUser = msg.sender_id !== userId;
-        if (isFromOtherUser) markSingleAsRead(msg.id);
+        if (msg.sender_id !== userId) markSingleAsRead(msg.id);
       } else if (data.type === "read") {
         const id = Number(data.message_id);
-        if (!isNaN(id)) {
-          setMessages(prev => prev.map(m => m.id === id ? { ...m, read_at: data.read_at } : m));
-        }
+        if (!isNaN(id)) setMessages(prev => prev.map(m => m.id === id ? { ...m, read_at: data.read_at } : m));
       }
     };
     ws.onclose = () => console.warn("WebSocket closed");
@@ -147,7 +152,7 @@ export default function ChatPage() {
       sender_id: userId,
       receiver_id: selectedUser?.id,
       room_id: roomId,
-      content: messageText.trim(),
+      content: messageText.trim()
     };
     socket.send(JSON.stringify(msg));
     setMessageText("");
@@ -163,22 +168,20 @@ export default function ChatPage() {
 
   const renderMessages = () => messages.map((msg, i) => {
     const isMyMessage = msg.sender_id === userId;
+    const isImage = msg.content.match(/\.(jpg|jpeg|png|gif|bmp|webp|svg)$/i);
     const isReadByOther = isMyMessage && typeof msg.read_at === "string" && msg.read_at !== "null";
-
     return (
       <div key={i} style={{ display: "flex", justifyContent: isMyMessage ? "flex-end" : "flex-start", marginBottom: "8px" }}>
         {isMyMessage ? (
           <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-end" }}>
-            {isReadByOther && (
-              <span style={{ fontSize: "0.75rem", color: "gray", marginRight: "4px" }}>既読</span>
-            )}
-            <div style={{ backgroundColor: "#dff0ff", padding: "0.5rem 0.8rem", borderRadius: "1rem", maxWidth: "70%" }}>
-              自分: {msg.content}
+            {isReadByOther && <span style={{ fontSize: "0.75rem", color: "gray", marginRight: "4px" }}>既読</span>}
+            <div style={{ backgroundColor: "#dff0ff", padding: "0.5rem", borderRadius: "1rem", maxWidth: "70%" }}>
+              自分: {isImage ? <img src={msg.content} alt="画像" style={{ width: "150px", borderRadius: "8px", cursor: "pointer" }} onClick={() => setPreviewUrl(msg.content)} /> : msg.content}
             </div>
           </div>
         ) : (
-          <div style={{ backgroundColor: "#f1f1f1", padding: "0.5rem 0.8rem", borderRadius: "1rem", maxWidth: "70%" }}>
-            相手: {msg.content}
+          <div style={{ backgroundColor: "#f1f1f1", padding: "0.5rem", borderRadius: "1rem", maxWidth: "70%" }}>
+            相手: {isImage ? <img src={msg.content} alt="画像" style={{ width: "150px", borderRadius: "8px", cursor: "pointer" }} onClick={() => setPreviewUrl(msg.content)} /> : msg.content}
           </div>
         )}
       </div>
@@ -196,17 +199,12 @@ export default function ChatPage() {
         <h3>グループチャット</h3>
         {groupRooms.map(room => (
           <div key={room.id} style={{ padding: "0.5rem", cursor: "pointer", background: roomId === room.id ? "#eee" : "" }}
-            onClick={async () => {
-              setSelectedUser(null);
-              await openRoomAndRead(room.id);
-            }}>{room.room_name || `ルーム ${room.id}`}</div>
+            onClick={async () => { setSelectedUser(null); await openRoomAndRead(room.id); }}>{room.room_name || `ルーム ${room.id}`}</div>
         ))}
         <h3 style={{ marginTop: "1rem" }}>ユーザー一覧</h3>
         {users.map(user => (
           <div key={user.id} style={{ padding: "0.5rem", cursor: "pointer", background: selectedUser?.id === user.id ? "#eee" : "" }}
-            onClick={() => handleUserClick(user)}>
-            {user.username}
-          </div>
+            onClick={() => handleUserClick(user)}>{user.username}</div>
         ))}
       </div>
 
@@ -221,27 +219,22 @@ export default function ChatPage() {
           {roomId ? (
             <>
               <h3>{selectedUser ? `${selectedUser.username} とのチャット` : "グループチャット"}</h3>
-
-              {/* ✅ グループメンバー一覧の表示 */}
               {roomId && !selectedUser && (
-  <div style={{ marginBottom: "1rem", display: "flex", alignItems: "center" }}>
-    <strong style={{ marginRight: "0.5rem" }}>メンバー一覧：</strong>
-    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-      {roomMembers.map((member) => (
-        <span key={member.id} style={{ background: "#eee", padding: "0.3rem 0.6rem", borderRadius: "1rem" }}>
-          {member.username}
-        </span>
-      ))}
-    </div>
-  </div>
-)}
-
-
+                <div style={{ marginBottom: "0.75rem", display: "flex", alignItems: "center" }}>
+                  <strong style={{ marginRight: "0.5rem" }}>メンバー一覧：</strong>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                    {roomMembers.map(member => (
+                      <span key={member.id} style={{ background: "#eee", padding: "0.3rem 0.6rem", borderRadius: "1rem" }}>{member.username}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div style={{ height: "300px", overflowY: "scroll", display: "flex", flexDirection: "column", border: "1px solid #ccc", marginBottom: "1rem", padding: "0.5rem" }}>
                 {renderMessages()}
                 <div ref={messageEndRef}></div>
               </div>
-              <input type="text" value={messageText} onChange={(e) => setMessageText(e.target.value)} style={{ width: "80%" }} placeholder="メッセージを入力" />
+              <input type="file" accept="image/*" onChange={handleImageUpload} style={{ marginBottom: "0.5rem" }} />
+              <input type="text" value={messageText} onChange={e => setMessageText(e.target.value)} style={{ width: "80%" }} placeholder="メッセージを入力" />
               <button onClick={handleSendMessage}>送信</button>
             </>
           ) : (
@@ -249,6 +242,13 @@ export default function ChatPage() {
           )}
         </div>
       </div>
+
+      {previewUrl && (
+        <div style={{ position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh", backgroundColor: "rgba(0,0,0,0.7)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000 }} onClick={() => setPreviewUrl(null)}>
+          <img src={previewUrl} style={{ maxWidth: "90%", maxHeight: "90%", borderRadius: "8px" }} />
+        </div>
+      )}
     </div>
   );
 }
+
