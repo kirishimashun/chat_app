@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
+import EmojiPicker from "../components/EmojiPicker";
 
 type User = { id: number; username: string };
 type Message = { id: number; room_id: number; sender_id: number; content: string; read_at?: string | null };
@@ -168,20 +169,34 @@ export default function ChatPage() {
 
   const renderMessages = () => messages.map((msg, i) => {
     const isMyMessage = msg.sender_id === userId;
-    const isImage = msg.content.match(/\.(jpg|jpeg|png|gif|bmp|webp|svg)$/i);
+    const isImage = msg.content.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|bmp|webp|svg)$/i);
     const isReadByOther = isMyMessage && typeof msg.read_at === "string" && msg.read_at !== "null";
+
+    if (isImage) {
+      return (
+        <div key={i} style={{ display: "flex", justifyContent: isMyMessage ? "flex-end" : "flex-start", marginBottom: "8px" }}>
+          <img
+            src={msg.content}
+            alt="画像"
+            style={{ width: "150px", borderRadius: "8px", cursor: "pointer" }}
+            onClick={() => setPreviewUrl(msg.content)}
+          />
+        </div>
+      );
+    }
+
     return (
       <div key={i} style={{ display: "flex", justifyContent: isMyMessage ? "flex-end" : "flex-start", marginBottom: "8px" }}>
         {isMyMessage ? (
           <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-end" }}>
             {isReadByOther && <span style={{ fontSize: "0.75rem", color: "gray", marginRight: "4px" }}>既読</span>}
             <div style={{ backgroundColor: "#dff0ff", padding: "0.5rem", borderRadius: "1rem", maxWidth: "70%" }}>
-              自分: {isImage ? <img src={msg.content} alt="画像" style={{ width: "150px", borderRadius: "8px", cursor: "pointer" }} onClick={() => setPreviewUrl(msg.content)} /> : msg.content}
+              自分: {msg.content}
             </div>
           </div>
         ) : (
           <div style={{ backgroundColor: "#f1f1f1", padding: "0.5rem", borderRadius: "1rem", maxWidth: "70%" }}>
-            相手: {isImage ? <img src={msg.content} alt="画像" style={{ width: "150px", borderRadius: "8px", cursor: "pointer" }} onClick={() => setPreviewUrl(msg.content)} /> : msg.content}
+            相手: {msg.content}
           </div>
         )}
       </div>
@@ -198,13 +213,11 @@ export default function ChatPage() {
         <button onClick={() => router.push("/group/create")} style={{ marginBottom: "1rem", padding: "0.4rem 0.6rem", backgroundColor: "#3498db", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}>＋ グループ作成</button>
         <h3>グループチャット</h3>
         {groupRooms.map(room => (
-          <div key={room.id} style={{ padding: "0.5rem", cursor: "pointer", background: roomId === room.id ? "#eee" : "" }}
-            onClick={async () => { setSelectedUser(null); await openRoomAndRead(room.id); }}>{room.room_name || `ルーム ${room.id}`}</div>
+          <div key={room.id} style={{ padding: "0.5rem", cursor: "pointer", background: roomId === room.id ? "#eee" : "" }} onClick={async () => { setSelectedUser(null); await openRoomAndRead(room.id); }}>{room.room_name || `ルーム ${room.id}`}</div>
         ))}
         <h3 style={{ marginTop: "1rem" }}>ユーザー一覧</h3>
         {users.map(user => (
-          <div key={user.id} style={{ padding: "0.5rem", cursor: "pointer", background: selectedUser?.id === user.id ? "#eee" : "" }}
-            onClick={() => handleUserClick(user)}>{user.username}</div>
+          <div key={user.id} style={{ padding: "0.5rem", cursor: "pointer", background: selectedUser?.id === user.id ? "#eee" : "" }} onClick={() => handleUserClick(user)}>{user.username}</div>
         ))}
       </div>
 
@@ -234,8 +247,11 @@ export default function ChatPage() {
                 <div ref={messageEndRef}></div>
               </div>
               <input type="file" accept="image/*" onChange={handleImageUpload} style={{ marginBottom: "0.5rem" }} />
-              <input type="text" value={messageText} onChange={e => setMessageText(e.target.value)} style={{ width: "80%" }} placeholder="メッセージを入力" />
-              <button onClick={handleSendMessage}>送信</button>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <EmojiPicker onSelect={(emoji) => setMessageText(prev => prev + emoji)} />
+                <input type="text" value={messageText} onChange={e => setMessageText(e.target.value)} style={{ flex: 1 }} placeholder="メッセージを入力" />
+                <button onClick={handleSendMessage}>送信</button>
+              </div>
             </>
           ) : (
             <p>チャットルームを選択してください</p>
@@ -251,4 +267,3 @@ export default function ChatPage() {
     </div>
   );
 }
-
