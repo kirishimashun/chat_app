@@ -23,6 +23,7 @@ func main() {
 
 	// 👤 ユーザー一覧
 	r.HandleFunc("/users", handlers.GetUsers).Methods("GET")
+	r.HandleFunc("/room/members", handlers.GetRoomMembers).Methods("GET")
 
 	// 💬 メッセージ・ルーム関連
 	r.HandleFunc("/messages", handlers.SendMessage).Methods("POST")

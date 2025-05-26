@@ -1,4 +1,3 @@
-// chat.tsx の修正済みコード（全文）
 "use client";
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
@@ -14,6 +13,7 @@ export default function ChatPage() {
   const [messageText, setMessageText] = useState("");
   const [userId, setUserId] = useState<number | null>(null);
   const [roomId, setRoomId] = useState<number | null>(null);
+  const [roomMembers, setRoomMembers] = useState<User[]>([]);
   const [socket, setSocket] = useState<WebSocket | null>(null);
   const [groupRooms, setGroupRooms] = useState<RoomInfo[]>([]);
   const router = useRouter();
@@ -46,28 +46,30 @@ export default function ChatPage() {
   };
 
   const openRoomAndRead = async (targetRoomId: number) => {
-  setRoomId(targetRoomId);
-  await markAllAsRead(targetRoomId);
-  const res = await fetch(`http://localhost:8080/messages?room_id=${targetRoomId}`, {
-    credentials: "include",
-  });
+    setRoomId(targetRoomId);
+    await markAllAsRead(targetRoomId);
 
-  const data = await res.json();
-  console.log("📩 openRoomAndRead で受け取った data:", data);
+    const res = await fetch(`http://localhost:8080/messages?room_id=${targetRoomId}`, {
+      credentials: "include",
+    });
+    const data = await res.json();
 
-  if (Array.isArray(data)) {
-    // バックエンドが配列を直接返す場合
-    setMessages(data);
-  } else if (Array.isArray(data.messages)) {
-    // バックエンドが { messages: [...] } の形式で返す場合
-    setMessages(data.messages);
-  } else {
-    console.error("❌ 不正な形式のmessagesレスポンス:", data);
-    setMessages([]);
-  }
-};
+    if (Array.isArray(data)) {
+      setMessages(data);
+    } else if (Array.isArray(data.messages)) {
+      setMessages(data.messages);
+    } else {
+      console.error("❌ 不正な形式のmessagesレスポンス:", data);
+      setMessages([]);
+    }
 
-
+    // 🎯 メンバー一覧取得
+    const memberRes = await fetch(`http://localhost:8080/room/members?room_id=${targetRoomId}`, {
+      credentials: "include",
+    });
+    const memberData = await memberRes.json();
+    setRoomMembers(Array.isArray(memberData) ? memberData : []);
+  };
 
   const restoreLastUser = async (users: User[]) => {
     const lastId = localStorage.getItem(`lastSelectedUserId_user${userId}`);
@@ -161,8 +163,7 @@ export default function ChatPage() {
 
   const renderMessages = () => messages.map((msg, i) => {
     const isMyMessage = msg.sender_id === userId;
-    const isReadByOther =
-  isMyMessage && typeof msg.read_at === "string" && msg.read_at !== "null";
+    const isReadByOther = isMyMessage && typeof msg.read_at === "string" && msg.read_at !== "null";
 
     return (
       <div key={i} style={{ display: "flex", justifyContent: isMyMessage ? "flex-end" : "flex-start", marginBottom: "8px" }}>
@@ -220,6 +221,22 @@ export default function ChatPage() {
           {roomId ? (
             <>
               <h3>{selectedUser ? `${selectedUser.username} とのチャット` : "グループチャット"}</h3>
+
+              {/* ✅ グループメンバー一覧の表示 */}
+              {roomId && !selectedUser && (
+  <div style={{ marginBottom: "1rem", display: "flex", alignItems: "center" }}>
+    <strong style={{ marginRight: "0.5rem" }}>メンバー一覧：</strong>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+      {roomMembers.map((member) => (
+        <span key={member.id} style={{ background: "#eee", padding: "0.3rem 0.6rem", borderRadius: "1rem" }}>
+          {member.username}
+        </span>
+      ))}
+    </div>
+  </div>
+)}
+
+
               <div style={{ height: "300px", overflowY: "scroll", display: "flex", flexDirection: "column", border: "1px solid #ccc", marginBottom: "1rem", padding: "0.5rem" }}>
                 {renderMessages()}
                 <div ref={messageEndRef}></div>

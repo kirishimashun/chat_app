@@ -200,3 +200,48 @@ func GetGroupRooms(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(rooms)
 }
+
+// GET /room/members?room_id=xx
+func GetRoomMembers(w http.ResponseWriter, r *http.Request) {
+	_, err := middleware.ValidateToken(r)
+	if err != nil {
+		http.Error(w, `{"error": "Unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	roomIDStr := r.URL.Query().Get("room_id")
+	if roomIDStr == "" {
+		http.Error(w, `{"error": "room_id が必要です"}`, http.StatusBadRequest)
+		return
+	}
+	roomID, err := strconv.Atoi(roomIDStr)
+	if err != nil {
+		http.Error(w, `{"error": "room_id は数値である必要があります"}`, http.StatusBadRequest)
+		return
+	}
+
+	rows, err := db.Conn.Query(`
+		SELECT u.id, u.username
+		FROM room_members rm
+		JOIN users u ON rm.user_id = u.id
+		WHERE rm.room_id = $1
+	`, roomID)
+	if err != nil {
+		http.Error(w, `{"error": "DB error"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var members []models.User
+	for rows.Next() {
+		var u models.User
+		if err := rows.Scan(&u.ID, &u.Username); err != nil {
+			http.Error(w, `{"error": "Scan error"}`, http.StatusInternalServerError)
+			return
+		}
+		members = append(members, u)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(members)
+}
