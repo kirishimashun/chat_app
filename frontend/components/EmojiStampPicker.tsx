@@ -83,7 +83,6 @@ export default function EmojiStampPicker({ onEmojiSelect, onStampSelect }: Props
   />
 )}
 
-
           {/* スタンプ */}
           {activeTab === "stamp" && (
             <div

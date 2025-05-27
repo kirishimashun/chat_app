@@ -36,6 +36,10 @@ func main() {
 	r.HandleFunc("/messages/read", handlers.MarkAllAsRead).Methods("POST")
 	r.HandleFunc("/upload", handlers.UploadImage).Methods("POST")
 	r.HandleFunc("/reactions", handlers.AddReaction).Methods("POST")
+	r.HandleFunc("/messages/edit", handlers.EditMessage).Methods("PUT")
+
+	// main.go または router の設定箇所
+	r.HandleFunc("/messages/delete", handlers.DeleteMessage).Methods("DELETE")
 
 	// 静的ファイル配信（画像URLアクセス用）
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./uploads"))))

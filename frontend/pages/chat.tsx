@@ -20,6 +20,10 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messageText, setMessageText] = useState("");
   const [userId, setUserId] = useState<number | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
+  const [editingText, setEditingText] = useState<string>("");
+　const [menuOpenMessageId, setMenuOpenMessageId] = useState<number | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const [roomId, setRoomId] = useState<number | null>(null);
   const [roomMembers, setRoomMembers] = useState<User[]>([]);
   const [socket, setSocket] = useState<WebSocket | null>(null);
@@ -125,6 +129,17 @@ export default function ChatPage() {
   }, [userId]);
 
   useEffect(() => {
+  const handleClickOutside = (e: MouseEvent) => {
+    if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      setMenuOpenMessageId(null);
+    }
+  };
+  document.addEventListener("mousedown", handleClickOutside);
+  return () => document.removeEventListener("mousedown", handleClickOutside);
+}, []);
+
+
+  useEffect(() => {
     if (!userId) return;
     fetch("http://localhost:8080/group_rooms", { credentials: "include" })
       .then(res => res.json())
@@ -140,7 +155,31 @@ export default function ChatPage() {
     });
   };
 
-  const handleSendMessage = async () => {
+  
+  const handleEditMessage = async (id: number, content: string) => {
+    const res = await fetch(`http://localhost:8080/messages/edit?id=${id}`, {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content })
+    });
+    if (res.ok) {
+      setMessages(prev => prev.map(m => m.id === id ? { ...m, content } : m));
+      setEditingMessageId(null);
+    }
+  };
+
+  const handleDeleteMessage = async (id: number) => {
+    const res = await fetch(`http://localhost:8080/messages/delete?id=${id}`, {
+      method: "DELETE",
+      credentials: "include"
+    });
+    if (res.ok) {
+      setMessages(prev => prev.map(m => m.id === id ? { ...m, content: "このメッセージは削除されました" } : m));
+    }
+  };
+
+const handleSendMessage = async () => {
     if (!messageText.trim() || userId == null || roomId == null || !socket) return;
     const msg = {
       type: "message",
@@ -181,7 +220,6 @@ export default function ChatPage() {
   const renderMessages = () => messages.map((msg, i) => {
   const isMyMessage = msg.sender_id === userId;
   const isReadByOther = isMyMessage && typeof msg.read_at === "string" && msg.read_at !== "null";
-
   const isImageLike = msg.content.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|svg)$/i)
     || msg.content.includes("/static/")
     || msg.content.includes("placebear.com")
@@ -199,7 +237,7 @@ export default function ChatPage() {
       }}
       onClick={() => !isMyMessage && setActiveReactionMessageId(msg.id)}
     >
-      <div style={{ position: "relative", display: "inline-block" }}>
+      <div style={{ position: "relative", display: "inline-block",overflow: "visible", }}>
         {isImageLike ? (
           <>
             <img
@@ -208,38 +246,118 @@ export default function ChatPage() {
               style={{ width: "150px", borderRadius: "8px", cursor: "pointer" }}
               onClick={() => setPreviewUrl(msg.content)}
             />
-            {isMyMessage && isReadByOther && (
-              <div style={{
-                marginTop: "4px",
-                fontSize: "0.75rem",
-                color: "gray",
-                textAlign: "right"
-              }}>既読</div>
-            )}
           </>
         ) : (
           <>
-            <div
-              style={{
-                backgroundColor: isMyMessage ? "#dff0ff" : "#f1f1f1",
-                padding: "0.5rem",
-                borderRadius: "1rem",
-                maxWidth: "70%",
-                whiteSpace: "pre-wrap",
-              }}
-            >
-              {isMyMessage ? `自分: ${msg.content}` : `相手: ${msg.content}`}
-            </div>
-            {isMyMessage && isReadByOther && (
-              <div style={{
-                position: "absolute",
-                bottom: "0",
-                left: "-36px",
-                fontSize: "0.75rem",
-                color: "gray"
-              }}>既読</div>
+            {editingMessageId === msg.id ? (
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <input
+                  value={editingText}
+                  onChange={(e) => setEditingText(e.target.value)}
+                  style={{ padding: "0.3rem", borderRadius: "4px", border: "1px solid #ccc" }}
+                />
+                <button onClick={() => handleEditMessage(msg.id, editingText)}>保存</button>
+                <button onClick={() => setEditingMessageId(null)}>キャンセル</button>
+              </div>
+            ) : (
+              <div
+                style={{
+                  backgroundColor: isMyMessage ? "#dff0ff" : "#f1f1f1",
+                  padding: "0.5rem",
+                  borderRadius: "1rem",
+                  maxWidth: "70%",
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {isMyMessage ? `自分: ${msg.content}` : `相手: ${msg.content}`}
+              </div>
             )}
           </>
+        )}
+
+        {/* ✅ 三点メニュー表示 */}
+        {isMyMessage && editingMessageId !== msg.id && (
+  <div style={{ position: "absolute", bottom: "0.2rem", right: "-1.5rem" }}>
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        setMenuOpenMessageId(prev => prev === msg.id ? null : msg.id);
+      }}
+      style={{
+        background: "none",
+        border: "none",
+        fontSize: "1.2rem",
+        cursor: "pointer"
+      }}
+    >
+      …
+    </button>
+    {menuOpenMessageId === msg.id && (
+      <div
+        ref={menuRef}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          position: "absolute",
+          bottom: "2rem",
+          right: 0,
+          backgroundColor: "white",
+          border: "1px solid #ccc",
+          borderRadius: "6px",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+          padding: "0.3rem 0.5rem",
+          display: "flex",
+          gap: "0.5rem",
+          zIndex: 1000
+        }}
+      >
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setEditingMessageId(msg.id);
+            setEditingText(msg.content);
+            setMenuOpenMessageId(null);
+          }}
+          style={{
+            background: "#eee",
+            border: "none",
+            padding: "0.3rem 0.5rem",
+            borderRadius: "4px",
+            cursor: "pointer"
+          }}
+        >
+          編集
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            handleDeleteMessage(msg.id);
+            setMenuOpenMessageId(null);
+          }}
+          style={{
+            background: "#fdd",
+            border: "none",
+            padding: "0.3rem 0.5rem",
+            borderRadius: "4px",
+            cursor: "pointer"
+          }}
+        >
+          送信取消
+        </button>
+      </div>
+    )}
+  </div>
+)}
+
+
+
+        {isMyMessage && isReadByOther && (
+          <div style={{
+            position: "absolute",
+            bottom: "0",
+            left: "-36px",
+            fontSize: "0.75rem",
+            color: "gray"
+          }}>既読</div>
         )}
       </div>
 
@@ -281,6 +399,7 @@ export default function ChatPage() {
     </div>
   );
 });
+
 
 
   useEffect(() => {
