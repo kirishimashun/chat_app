@@ -81,42 +81,74 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
-    if (!userId || !roomId) return;
-    const ws = new WebSocket("ws://localhost:8080/ws");
-    ws.onopen = async () => {
-      setSocket(ws);
-      await markAllAsRead(roomId);
-    };
-    ws.onmessage = async event => {
-      const data = JSON.parse(event.data);
-      if (data.type === "message") {
-        const msg: Message = {
-          id: data.id,
-          room_id: data.room_id ?? roomId!,
-          sender_id: data.sender_id,
-          content: data.content,
-          read_at: data.read_at ?? null,
-        };
-        if (msg.room_id !== roomId) return;
-        setMessages(prev => [...prev, msg]);
-        if (msg.sender_id !== userId) markSingleAsRead(msg.id);
-      } else if (data.type === "read") {
-        const id = Number(data.message_id);
-        if (!isNaN(id)) setMessages(prev => prev.map(m => m.id === id ? { ...m, read_at: data.read_at } : m));
-      } else if (data.type === "reaction") {
-        const id = Number(data.message_id);
-        if (!isNaN(id)) setMessages(prev => prev.map(m => {
-          if (m.id !== id) return m;
-          const prevReactions = m.reactions || [];
-          const existing = prevReactions.filter(r => r.user_id !== data.user_id);
-          return { ...m, reactions: [...existing, { user_id: data.user_id, emoji: data.emoji }] };
-        }));
+  if (!userId || !roomId) return;
+  const ws = new WebSocket("ws://localhost:8080/ws");
+  ws.onopen = async () => {
+    setSocket(ws);
+    await markAllAsRead(roomId);
+  };
+
+  ws.onmessage = async (event) => {
+    const data = JSON.parse(event.data);
+
+    if (data.type === "message") {
+      const msg = {
+        id: data.id,
+        room_id: data.room_id ?? roomId,
+        sender_id: data.sender_id,
+        content: data.content,
+        read_at: data.read_at ?? null,
+      };
+      if (msg.room_id !== roomId) return;
+      setMessages((prev) => [...prev, msg]);
+      if (msg.sender_id !== userId) markSingleAsRead(msg.id);
+    } else if (data.type === "read") {
+      const id = Number(data.message_id);
+      if (!isNaN(id)) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === id ? { ...m, read_at: data.read_at } : m))
+        );
       }
-    };
-    ws.onclose = () => console.warn("WebSocket closed");
-    ws.onerror = err => console.error("WebSocket error", err);
-    return () => ws.close();
-  }, [userId, roomId]);
+    } else if (data.type === "reaction") {
+      const id = Number(data.message_id);
+      if (!isNaN(id)) {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== id) return m;
+            const prevReactions = m.reactions || [];
+            const filtered = prevReactions.filter(
+              (r) => r.user_id !== data.user_id
+            );
+            return {
+              ...m,
+              reactions: [...filtered, { user_id: data.user_id, emoji: data.emoji }],
+            };
+          })
+        );
+      }
+    } else if (data.type === "edit") {
+      const id = Number(data.message_id);
+      if (!isNaN(id)) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === id ? { ...m, content: data.content } : m))
+        );
+      }
+    } else if (data.type === "delete") {
+      const id = Number(data.message_id);
+      if (!isNaN(id)) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === id ? { ...m, content: "このメッセージは削除されました" } : m
+          )
+        );
+      }
+    }
+  };
+
+  ws.onclose = () => console.warn("WebSocket closed");
+  ws.onerror = (err) => console.error("WebSocket error", err);
+  return () => ws.close();
+}, [userId, roomId]);
 
   useEffect(() => {
     if (!userId) return;

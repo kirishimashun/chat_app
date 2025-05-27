@@ -204,3 +204,43 @@ func NotifyUser(userID int, payload interface{}) {
 		log.Printf("❌ WebSocket未接続: userID=%d", userID)
 	}
 }
+
+// メッセージ編集をルーム内全員に通知する
+// handlers/ws.go
+
+// BroadcastEdit は指定されたルームに編集通知を送信する
+func BroadcastEdit(roomID int, messageID int, content string) {
+	clientsMu.Lock()
+	defer clientsMu.Unlock()
+
+	for uid, conn := range clients {
+		if conn != nil {
+			err := conn.WriteJSON(map[string]interface{}{
+				"type":       "edit",
+				"message_id": messageID,
+				"content":    content,
+			})
+			if err != nil {
+				log.Printf("⚠️ BroadcastEdit失敗: userID=%d, err=%v", uid, err)
+			}
+		}
+	}
+}
+
+// BroadcastDelete は指定されたルームに削除通知を送信する
+func BroadcastDelete(roomID int, messageID int) {
+	clientsMu.Lock()
+	defer clientsMu.Unlock()
+
+	for uid, conn := range clients {
+		if conn != nil {
+			err := conn.WriteJSON(map[string]interface{}{
+				"type":       "delete",
+				"message_id": messageID,
+			})
+			if err != nil {
+				log.Printf("⚠️ BroadcastDelete失敗: userID=%d, err=%v", uid, err)
+			}
+		}
+	}
+}

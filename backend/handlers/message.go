@@ -102,8 +102,19 @@ func EditMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "Failed to edit"}`, http.StatusInternalServerError)
 		return
 	}
-
+	var roomID int
+	err = db.Conn.QueryRow(`SELECT room_id FROM messages WHERE id = $1`, messageID).Scan(&roomID)
+	if err == nil {
+		BroadcastEdit(roomID, messageID, payload.Content)
+	}
 	w.WriteHeader(http.StatusOK)
+
+	NotifyUser(userID, map[string]interface{}{
+		"type":       "edit",
+		"message_id": messageID,
+		"content":    payload.Content,
+	})
+
 }
 
 func DeleteMessage(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +155,18 @@ func DeleteMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var roomID int
+	err = db.Conn.QueryRow(`SELECT room_id FROM messages WHERE id = $1`, id).Scan(&roomID)
+	if err == nil {
+		BroadcastDelete(roomID, id)
+	}
 	w.WriteHeader(http.StatusOK)
+
+	NotifyUser(userID, map[string]interface{}{
+		"type":       "delete",
+		"message_id": id,
+	})
+
 }
 
 // メッセージ取得（read_at + reactions付き）
