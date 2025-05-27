@@ -32,6 +32,9 @@ export default function ChatPage() {
   const [activeReactionMessageId, setActiveReactionMessageId] = useState<number | null>(null);
   const router = useRouter();
   const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const [unreadCounts, setUnreadCounts] = useState<{ [roomId: number]: number }>({});
+  const [userRoomMap, setUserRoomMap] = useState<{ [userId: number]: number }>({});
+
 
   const markAllAsRead = async (roomId: number) => {
     await fetch("http://localhost:8080/messages/read", {
@@ -43,24 +46,75 @@ export default function ChatPage() {
   };
 
   const markSingleAsRead = async (messageId: number) => {
-    await fetch("http://localhost:8080/messages/read", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message_id: messageId }),
-    });
-  };
+  await fetch("http://localhost:8080/messages/read", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message_id: messageId }),
+  });
+
+  // ✅ 既読処理後、未読数を更新
+  const res = await fetch("http://localhost:8080/unread_counts", {
+    credentials: "include",
+  });
+  const data = await res.json();
+  setUnreadCounts(data);
+};
+
+
+
+  const fetchRoomMap = async (users: User[]) => {
+  const map: { [userId: number]: number } = {};
+  for (const user of users) {
+    try {
+      const res = await fetch(`http://localhost:8080/room?user_id=${user.id}`, {
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (data.room_id) {
+        map[user.id] = data.room_id;
+      }
+    } catch (err) {
+      console.error(`room取得失敗: user_id=${user.id}`, err);
+    }
+  }
+  setUserRoomMap(map);
+};
+
 
   const openRoomAndRead = async (targetRoomId: number) => {
-    setRoomId(targetRoomId);
-    await markAllAsRead(targetRoomId);
-    const res = await fetch(`http://localhost:8080/messages?room_id=${targetRoomId}`, { credentials: "include" });
-    const data = await res.json();
-    setMessages(Array.isArray(data) ? data : data.messages || []);
-    const memberRes = await fetch(`http://localhost:8080/room/members?room_id=${targetRoomId}`, { credentials: "include" });
-    const memberData = await memberRes.json();
-    setRoomMembers(Array.isArray(memberData) ? memberData : []);
-  };
+  setRoomId(targetRoomId);
+  await markAllAsRead(targetRoomId);
+
+  const res = await fetch(`http://localhost:8080/messages?room_id=${targetRoomId}`, { credentials: "include" });
+  const data = await res.json();
+  setMessages(Array.isArray(data) ? data : data.messages || []);
+
+  const memberRes = await fetch(`http://localhost:8080/room/members?room_id=${targetRoomId}`, { credentials: "include" });
+  const memberData = await memberRes.json();
+  setRoomMembers(Array.isArray(memberData) ? memberData : []);
+
+  // ✅ 既読後、未読数を確実に再取得（バッジ消える）
+  try {
+  const unreadRes = await fetch("http://localhost:8080/unread_counts", { credentials: "include" });
+  const unreadData = await unreadRes.json();
+  setUnreadCounts(unreadData);
+
+  // ✅ 自分にも未読数更新通知（バッジを消す）
+  if (socket && roomId != null) {
+    socket.send(JSON.stringify({
+      type: "read",
+      message_id: -1, // ダミーID（実際のread_at通知対象がない場合）
+      read_at: new Date().toISOString(),
+    }));
+  }
+
+} catch (err) {
+  console.error("❌ 未読数の取得に失敗", err);
+}
+
+};
+
 
   const restoreLastUser = async (users: User[]) => {
     const lastId = localStorage.getItem(`lastSelectedUserId_user${userId}`);
@@ -89,61 +143,74 @@ export default function ChatPage() {
   };
 
   ws.onmessage = async (event) => {
-    const data = JSON.parse(event.data);
+  const data = JSON.parse(event.data);
 
-    if (data.type === "message") {
-      const msg = {
-        id: data.id,
-        room_id: data.room_id ?? roomId,
-        sender_id: data.sender_id,
-        content: data.content,
-        read_at: data.read_at ?? null,
-      };
-      if (msg.room_id !== roomId) return;
-      setMessages((prev) => [...prev, msg]);
-      if (msg.sender_id !== userId) markSingleAsRead(msg.id);
-    } else if (data.type === "read") {
-      const id = Number(data.message_id);
-      if (!isNaN(id)) {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === id ? { ...m, read_at: data.read_at } : m))
-        );
-      }
-    } else if (data.type === "reaction") {
-      const id = Number(data.message_id);
-      if (!isNaN(id)) {
-        setMessages((prev) =>
-          prev.map((m) => {
-            if (m.id !== id) return m;
-            const prevReactions = m.reactions || [];
-            const filtered = prevReactions.filter(
-              (r) => r.user_id !== data.user_id
-            );
-            return {
-              ...m,
-              reactions: [...filtered, { user_id: data.user_id, emoji: data.emoji }],
-            };
-          })
-        );
-      }
-    } else if (data.type === "edit") {
-      const id = Number(data.message_id);
-      if (!isNaN(id)) {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === id ? { ...m, content: data.content } : m))
-        );
-      }
-    } else if (data.type === "delete") {
-      const id = Number(data.message_id);
-      if (!isNaN(id)) {
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === id ? { ...m, content: "このメッセージは削除されました" } : m
-          )
-        );
-      }
+  if (data.type === "message") {
+    const msg = {
+      id: data.id,
+      room_id: data.room_id ?? roomId,
+      sender_id: data.sender_id,
+      content: data.content,
+      read_at: data.read_at ?? null,
+    };
+    if (msg.room_id !== roomId) return;
+    setMessages((prev) => [...prev, msg]);
+    if (msg.sender_id !== userId) markSingleAsRead(msg.id);
+
+    fetch("http://localhost:8080/unread_counts", { credentials: "include" })
+      .then(res => res.json())
+      .then(data => setUnreadCounts(data));
+
+  } else if (data.type === "read") {
+    const id = Number(data.message_id);
+    if (!isNaN(id)) {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, read_at: data.read_at } : m))
+      );
     }
-  };
+  } else if (data.type === "reaction") {
+    const id = Number(data.message_id);
+    if (!isNaN(id)) {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== id) return m;
+          const prevReactions = m.reactions || [];
+          const filtered = prevReactions.filter(
+            (r) => r.user_id !== data.user_id
+          );
+          return {
+            ...m,
+            reactions: [...filtered, { user_id: data.user_id, emoji: data.emoji }],
+          };
+        })
+      );
+    }
+  } else if (data.type === "edit") {
+    const id = Number(data.message_id);
+    if (!isNaN(id)) {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, content: data.content } : m))
+      );
+    }
+  } else if (data.type === "delete") {
+    const id = Number(data.message_id);
+    if (!isNaN(id)) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === id ? { ...m, content: "このメッセージは削除されました" } : m
+        )
+      );
+    }
+  } else if (data.type === "unread") {
+    const roomId = data.room_id;
+    const count = data.count;
+    setUnreadCounts(prev => ({
+      ...prev,
+      [roomId]: count,
+    }));
+  }
+};
+
 
   ws.onclose = () => console.warn("WebSocket closed");
   ws.onerror = (err) => console.error("WebSocket error", err);
@@ -156,8 +223,11 @@ export default function ChatPage() {
       .then(res => res.json())
       .then(data => {
         setUsers(data);
-        restoreLastUser(data);
       });
+      fetch("http://localhost:8080/unread_counts", { credentials: "include" })
+  .then(res => res.json())
+  .then(data => setUnreadCounts(data));
+
   }, [userId]);
 
   useEffect(() => {
@@ -432,8 +502,6 @@ const handleSendMessage = async () => {
   );
 });
 
-
-
   useEffect(() => {
     if (messageEndRef.current) messageEndRef.current.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -444,12 +512,69 @@ const handleSendMessage = async () => {
         <button onClick={() => router.push("/group/create")} style={{ marginBottom: "1rem", padding: "0.4rem 0.6rem", backgroundColor: "#3498db", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}>＋ グループ作成</button>
         <h3>グループチャット</h3>
         {groupRooms.map(room => (
-          <div key={room.id} style={{ padding: "0.5rem", cursor: "pointer", background: roomId === room.id ? "#eee" : "" }} onClick={async () => { setSelectedUser(null); await openRoomAndRead(room.id); }}>{room.room_name || `ルーム ${room.id}`}</div>
-        ))}
+  <div key={room.id}
+    style={{ padding: "0.5rem", cursor: "pointer", background: roomId === room.id ? "#eee" : "", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+    onClick={async () => {
+      setSelectedUser(null);
+      await openRoomAndRead(room.id);
+    }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+  <span>{room.room_name || `ルーム ${room.id}`}</span>
+  {unreadCounts[room.id] > 0 && (
+    <span style={{
+      background: "red",
+      color: "white",
+      borderRadius: "9999px",
+      padding: "0.2rem 0.6rem",
+      fontSize: "0.75rem",
+      marginLeft: "0.5rem"
+    }}>
+      {unreadCounts[room.id]}
+    </span>
+  )}
+</div>
+
+  </div>
+))}
+
         <h3 style={{ marginTop: "1rem" }}>ユーザー一覧</h3>
-        {users.map(user => (
-          <div key={user.id} style={{ padding: "0.5rem", cursor: "pointer", background: selectedUser?.id === user.id ? "#eee" : "" }} onClick={() => handleUserClick(user)}>{user.username}</div>
-        ))}
+        {users.map(user => {
+  const roomId = userRoomMap[user.id];
+  const unread = unreadCounts[roomId] || 0;
+
+  return (
+    <div key={user.id}
+      style={{
+        padding: "0.5rem",
+        cursor: "pointer",
+        background: selectedUser?.id === user.id ? "#eee" : "",
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center"
+      }}
+      onClick={() => handleUserClick(user)}>
+      
+      <span>{user.username}</span>
+
+      {unread > 0 && (
+        <span
+          style={{
+            background: "red",
+            color: "white",
+            borderRadius: "9999px",
+            padding: "0.2rem 0.6rem",
+            fontSize: "0.75rem",
+            marginLeft: "0.5rem"
+          }}
+        >
+          {unread}
+        </span>
+      )}
+    </div>
+  );
+})}
+
+
       </div>
       <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
         <div style={{ padding: "1rem", textAlign: "right" }}>

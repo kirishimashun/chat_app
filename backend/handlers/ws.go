@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -82,10 +83,10 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 			log.Printf("📨 受信: %d → %s", msg.SenderID, msg.Content)
 
 			query := `
-				INSERT INTO messages (room_id, sender_id, content)
-				VALUES ($1, $2, $3)
-				RETURNING id, created_at
-			`
+    INSERT INTO messages (room_id, sender_id, content)
+    VALUES ($1, $2, $3)
+    RETURNING id, created_at
+  `
 			err := db.Conn.QueryRow(query, msg.RoomID, msg.SenderID, msg.Content).
 				Scan(&msg.ID, &msg.Timestamp)
 			if err != nil {
@@ -107,6 +108,7 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 			clientsMu.Lock()
 			for _, member := range members {
 				if conn, ok := clients[member.ID]; ok {
+					// 📩 メッセージ通知
 					err := conn.WriteJSON(map[string]interface{}{
 						"type":      "message",
 						"id":        msg.ID,
@@ -118,6 +120,30 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 					if err != nil {
 						log.Println("⚠️ メッセージ送信エラー:", err)
 					}
+
+					// 📡 未読バッジ通知（自分以外）
+					// 📡 未読バッジ通知（自分以外）
+					if member.ID != msg.SenderID {
+						var count int
+						err := db.Conn.QueryRow(`
+		SELECT COUNT(*) FROM message_reads mr
+		JOIN messages m ON mr.message_id = m.id
+		WHERE mr.user_id = $1 AND mr.read_at IS NULL AND m.room_id = $2
+	`, member.ID, msg.RoomID).Scan(&count)
+						if err != nil {
+							log.Printf("❌ 未読数取得失敗: userID=%d roomID=%d err=%v", member.ID, msg.RoomID, err)
+						} else {
+							err := conn.WriteJSON(map[string]interface{}{
+								"type":    "unread",
+								"room_id": msg.RoomID,
+								"count":   count,
+							})
+							if err != nil {
+								log.Println("⚠️ 未読数送信エラー:", err)
+							}
+						}
+					}
+
 				}
 			}
 			clientsMu.Unlock()
@@ -146,6 +172,15 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 				"message_id": messageID,
 				"read_at":    readAtStr,
 			})
+
+			// ✅ 自分のバッジを即時更新（未読が減る）
+			var roomID int
+			err = db.Conn.QueryRow("SELECT room_id FROM messages WHERE id = $1", messageID).Scan(&roomID)
+			if err != nil {
+				log.Printf("❌ roomID取得失敗: messageID=%d err=%v", messageID, err)
+			} else {
+				NotifyUnreadCount(userID, roomID)
+			}
 
 		case "reaction":
 			messageIDFloat, ok1 := raw["message_id"].(float64)
@@ -243,4 +278,55 @@ func BroadcastDelete(roomID int, messageID int) {
 			}
 		}
 	}
+}
+
+func BroadcastMessage(roomID int, messageID int, senderID int, content string, createdAt time.Time) {
+	msg := map[string]interface{}{
+		"type":      "message",
+		"id":        messageID,
+		"room_id":   roomID,
+		"sender_id": senderID,
+		"content":   content,
+		"read_at":   nil,
+		"timestamp": createdAt.Format(time.RFC3339),
+	}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("❌ BroadcastMessage JSONエンコード失敗: %v", err)
+		return
+	}
+
+	// 全クライアントに送信
+	clientsMu.Lock()
+	defer clientsMu.Unlock()
+	for uid, conn := range clients {
+		if conn == nil {
+			continue
+		}
+		if err := conn.WriteMessage(1, b); err != nil {
+			log.Printf("⚠️ メッセージ送信失敗 userID=%d: %v", uid, err)
+		} else {
+			log.Printf("📩 BroadcastMessage: userID=%d に送信", uid)
+		}
+	}
+}
+
+func NotifyUnreadCount(userID int, roomID int) {
+	var count int
+	err := db.Conn.QueryRow(`
+		SELECT COUNT(*) FROM message_reads mr
+		JOIN messages m ON mr.message_id = m.id
+		WHERE mr.user_id = $1 AND mr.read_at IS NULL AND m.room_id = $2
+	`, userID, roomID).Scan(&count)
+	if err != nil {
+		log.Printf("❌ NotifyUnreadCount失敗: userID=%d roomID=%d err=%v", userID, roomID, err)
+		return
+	}
+
+	payload := map[string]interface{}{
+		"type":    "unread",
+		"room_id": roomID,
+		"count":   count,
+	}
+	NotifyUser(userID, payload)
 }

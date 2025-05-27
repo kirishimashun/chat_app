@@ -65,6 +65,8 @@ func SendMessage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("⚠️ message_reads 挿入エラー: %v", err)
 	}
+	// メッセージ送信後にBroadcast
+	BroadcastMessage(msg.RoomID, msg.ID, msg.SenderID, msg.Content, msg.Timestamp)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(msg)

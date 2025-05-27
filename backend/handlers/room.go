@@ -246,3 +246,37 @@ func GetRoomMembers(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(members)
 }
+
+// GetUnreadCount は各ルームの未読数を返す
+func GetUnreadCount(w http.ResponseWriter, r *http.Request) {
+	userID, err := middleware.ValidateToken(r)
+	if err != nil {
+		http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	rows, err := db.Conn.Query(`
+		SELECT m.room_id, COUNT(*) AS unread_count
+		FROM messages m
+		JOIN message_reads mr ON m.id = mr.message_id
+		WHERE mr.user_id = $1 AND mr.read_at IS NULL
+		GROUP BY m.room_id
+	`, userID)
+	if err != nil {
+		http.Error(w, `{"error":"DB error"}`, http.StatusInternalServerError)
+		log.Println("❌ 未読数取得失敗:", err)
+		return
+	}
+	defer rows.Close()
+
+	result := make(map[int]int)
+	for rows.Next() {
+		var roomID, count int
+		if err := rows.Scan(&roomID, &count); err == nil {
+			result[roomID] = count
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
