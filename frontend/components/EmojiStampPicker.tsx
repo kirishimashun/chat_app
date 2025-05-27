@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Picker } from "emoji-mart";
-import "emoji-mart/css/emoji-mart.css";
+import Picker from '@emoji-mart/react';
+import data from '@emoji-mart/data';
 
 type Props = {
   onEmojiSelect: (emoji: string) => void;
@@ -72,14 +72,17 @@ export default function EmojiStampPicker({ onEmojiSelect, onStampSelect }: Props
 
           {/* 絵文字 */}
           {activeTab === "emoji" && (
-            <Picker
-              onSelect={(emoji: any) => {
-                onEmojiSelect(emoji.native);
-                setShow(false);
-              }}
-              style={{ width: "100%" }}
-            />
-          )}
+  <Picker
+    data={data}
+    onEmojiSelect={(emoji: any) => {
+      onEmojiSelect(emoji.native);
+      setShow(false);
+    }}
+    theme="light"
+    previewPosition="none"
+  />
+)}
+
 
           {/* スタンプ */}
           {activeTab === "stamp" && (

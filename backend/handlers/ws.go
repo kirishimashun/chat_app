@@ -1,10 +1,14 @@
+// ✅ Go: handlers/ws.go - WebSocket で reaction を受信し処理する
+
 package handlers
 
 import (
 	"backend/db"
 	"backend/middleware"
 	"backend/models"
+	"bytes"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"sync"
@@ -102,7 +106,6 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 
 			clientsMu.Lock()
 			for _, member := range members {
-				// ✅ 自分も含めて全員に送信
 				if conn, ok := clients[member.ID]; ok {
 					err := conn.WriteJSON(map[string]interface{}{
 						"type":      "message",
@@ -143,6 +146,41 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 				"message_id": messageID,
 				"read_at":    readAtStr,
 			})
+
+		case "reaction":
+			messageIDFloat, ok1 := raw["message_id"].(float64)
+			emojiStr, ok2 := raw["emoji"].(string)
+			if !ok1 || !ok2 {
+				log.Println("⚠️ reaction メッセージ形式エラー:", raw)
+				continue
+			}
+			messageID := int(messageIDFloat)
+			log.Printf("📩 reaction 受信: userID=%d messageID=%d emoji=%s", userID, messageID, emojiStr)
+
+			req := ReactionRequest{MessageID: messageID, Emoji: emojiStr}
+			body, _ := json.Marshal(req)
+			r := &http.Request{Body: io.NopCloser(bytes.NewReader(body))}
+			HandleReaction(nil, r)
+
+			senderID, err := models.GetSenderIDByMessageID(db.Conn, messageID)
+			if err != nil {
+				log.Printf("❌ senderID取得失敗: messageID=%d err=%v", messageID, err)
+				continue
+			}
+
+			payload := map[string]interface{}{
+				"type":       "reaction",
+				"message_id": messageID,
+				"emoji":      emojiStr,
+			}
+
+			// 🔁 自分にも通知（これが必要）
+			NotifyUser(userID, payload)
+
+			// 🔁 相手にも通知（同一人物でなければ）
+			if senderID != userID {
+				NotifyUser(senderID, payload)
+			}
 
 		default:
 			log.Println("⚠️ 未対応のメッセージtype:", msgType)

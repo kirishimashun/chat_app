@@ -1,12 +1,17 @@
-// chat.tsx（画像送信機能復元済み・省略なし完全版）
 "use client";
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import EmojiStampPicker from "../components/EmojiStampPicker";
 
-// 型定義
 type User = { id: number; username: string };
-type Message = { id: number; room_id: number; sender_id: number; content: string; read_at?: string | null };
+type Message = {
+  id: number;
+  room_id: number;
+  sender_id: number;
+  content: string;
+  read_at?: string | null;
+  reactions?: { user_id: number; emoji: string }[];
+};
 type RoomInfo = { id: number; room_name: string; is_group: boolean };
 
 export default function ChatPage() {
@@ -20,6 +25,7 @@ export default function ChatPage() {
   const [socket, setSocket] = useState<WebSocket | null>(null);
   const [groupRooms, setGroupRooms] = useState<RoomInfo[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [activeReactionMessageId, setActiveReactionMessageId] = useState<number | null>(null);
   const router = useRouter();
   const messageEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -28,7 +34,7 @@ export default function ChatPage() {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ room_id: roomId })
+      body: JSON.stringify({ room_id: roomId }),
     });
   };
 
@@ -37,7 +43,7 @@ export default function ChatPage() {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message_id: messageId })
+      body: JSON.stringify({ message_id: messageId }),
     });
   };
 
@@ -85,7 +91,7 @@ export default function ChatPage() {
           room_id: data.room_id ?? roomId!,
           sender_id: data.sender_id,
           content: data.content,
-          read_at: data.read_at ?? null
+          read_at: data.read_at ?? null,
         };
         if (msg.room_id !== roomId) return;
         setMessages(prev => [...prev, msg]);
@@ -93,6 +99,14 @@ export default function ChatPage() {
       } else if (data.type === "read") {
         const id = Number(data.message_id);
         if (!isNaN(id)) setMessages(prev => prev.map(m => m.id === id ? { ...m, read_at: data.read_at } : m));
+      } else if (data.type === "reaction") {
+        const id = Number(data.message_id);
+        if (!isNaN(id)) setMessages(prev => prev.map(m => {
+          if (m.id !== id) return m;
+          const prevReactions = m.reactions || [];
+          const existing = prevReactions.filter(r => r.user_id !== data.user_id);
+          return { ...m, reactions: [...existing, { user_id: data.user_id, emoji: data.emoji }] };
+        }));
       }
     };
     ws.onclose = () => console.warn("WebSocket closed");
@@ -116,6 +130,15 @@ export default function ChatPage() {
       .then(res => res.json())
       .then(data => Array.isArray(data) ? setGroupRooms(data) : setGroupRooms([]));
   }, [userId]);
+
+  const toggleReaction = async (messageId: number, emoji: string) => {
+    await fetch("http://localhost:8080/reactions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ message_id: messageId, emoji })
+    });
+  };
 
   const handleSendMessage = async () => {
     if (!messageText.trim() || userId == null || roomId == null || !socket) return;
@@ -142,7 +165,7 @@ export default function ChatPage() {
       sender_id: userId,
       receiver_id: selectedUser?.id,
       room_id: roomId,
-      content: url
+      content: url,
     };
     socket.send(JSON.stringify(msg));
   };
@@ -156,43 +179,109 @@ export default function ChatPage() {
   };
 
   const renderMessages = () => messages.map((msg, i) => {
-    const isMyMessage = msg.sender_id === userId;
-    const isReadByOther = isMyMessage && typeof msg.read_at === "string" && msg.read_at !== "null";
-    const isImageLike =
-      msg.content.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|svg)$/i) ||
-      msg.content.includes("placehold.co") ||
-      msg.content.includes("placebear.com");
+  const isMyMessage = msg.sender_id === userId;
+  const isReadByOther = isMyMessage && typeof msg.read_at === "string" && msg.read_at !== "null";
 
-    if (isImageLike) {
-      return (
-        <div key={i} style={{ display: "flex", justifyContent: isMyMessage ? "flex-end" : "flex-start", marginBottom: "8px" }}>
-          <img
-            src={msg.content}
-            alt="画像"
-            style={{ width: "150px", borderRadius: "8px", cursor: "pointer" }}
-            onClick={() => setPreviewUrl(msg.content)}
-          />
-        </div>
-      );
-    }
+  const isImageLike = msg.content.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|svg)$/i)
+    || msg.content.includes("/static/")
+    || msg.content.includes("placebear.com")
+    || msg.content.includes("placekitten.com");
 
-    return (
-      <div key={i} style={{ display: "flex", justifyContent: isMyMessage ? "flex-end" : "flex-start", marginBottom: "8px" }}>
-        {isMyMessage ? (
-          <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-end" }}>
-            {isReadByOther && <span style={{ fontSize: "0.75rem", color: "gray", marginRight: "4px" }}>既読</span>}
-            <div style={{ backgroundColor: "#dff0ff", padding: "0.5rem", borderRadius: "1rem", maxWidth: "70%" }}>
-              自分: {msg.content}
-            </div>
-          </div>
+  return (
+    <div
+      key={i}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: isMyMessage ? "flex-end" : "flex-start",
+        marginBottom: "12px",
+        position: "relative",
+      }}
+      onClick={() => !isMyMessage && setActiveReactionMessageId(msg.id)}
+    >
+      <div style={{ position: "relative", display: "inline-block" }}>
+        {isImageLike ? (
+          <>
+            <img
+              src={msg.content}
+              alt="画像"
+              style={{ width: "150px", borderRadius: "8px", cursor: "pointer" }}
+              onClick={() => setPreviewUrl(msg.content)}
+            />
+            {isMyMessage && isReadByOther && (
+              <div style={{
+                marginTop: "4px",
+                fontSize: "0.75rem",
+                color: "gray",
+                textAlign: "right"
+              }}>既読</div>
+            )}
+          </>
         ) : (
-          <div style={{ backgroundColor: "#f1f1f1", padding: "0.5rem", borderRadius: "1rem", maxWidth: "70%" }}>
-            相手: {msg.content}
-          </div>
+          <>
+            <div
+              style={{
+                backgroundColor: isMyMessage ? "#dff0ff" : "#f1f1f1",
+                padding: "0.5rem",
+                borderRadius: "1rem",
+                maxWidth: "70%",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {isMyMessage ? `自分: ${msg.content}` : `相手: ${msg.content}`}
+            </div>
+            {isMyMessage && isReadByOther && (
+              <div style={{
+                position: "absolute",
+                bottom: "0",
+                left: "-36px",
+                fontSize: "0.75rem",
+                color: "gray"
+              }}>既読</div>
+            )}
+          </>
         )}
       </div>
-    );
-  });
+
+      {(msg.reactions ?? []).length > 0 && (
+        <div style={{
+          marginTop: "4px",
+          alignSelf: isMyMessage ? "flex-end" : "flex-start",
+          display: "flex",
+          gap: "6px"
+        }}>
+          {msg.reactions!.map((r, idx) => (
+            <span key={idx} style={{ fontSize: "1.2rem" }}>{r.emoji}</span>
+          ))}
+        </div>
+      )}
+
+      {!isMyMessage && activeReactionMessageId === msg.id && (
+        <div style={{
+          marginTop: "4px",
+          display: "flex",
+          gap: "4px",
+          alignSelf: "flex-start"
+        }}>
+          {["👍", "❤️", "😂"].map(e => (
+            <button key={e} onClick={(ev) => {
+              ev.stopPropagation();
+              toggleReaction(msg.id, e);
+              setActiveReactionMessageId(null);
+            }} style={{
+              background: "#eee",
+              borderRadius: "12px",
+              padding: "2px 6px",
+              border: "1px solid #ccc",
+              cursor: "pointer"
+            }}>{e}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+
 
   useEffect(() => {
     if (messageEndRef.current) messageEndRef.current.scrollIntoView({ behavior: "smooth" });
@@ -204,16 +293,13 @@ export default function ChatPage() {
         <button onClick={() => router.push("/group/create")} style={{ marginBottom: "1rem", padding: "0.4rem 0.6rem", backgroundColor: "#3498db", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}>＋ グループ作成</button>
         <h3>グループチャット</h3>
         {groupRooms.map(room => (
-          <div key={room.id} style={{ padding: "0.5rem", cursor: "pointer", background: roomId === room.id ? "#eee" : "" }}
-            onClick={async () => { setSelectedUser(null); await openRoomAndRead(room.id); }}>{room.room_name || `ルーム ${room.id}`}</div>
+          <div key={room.id} style={{ padding: "0.5rem", cursor: "pointer", background: roomId === room.id ? "#eee" : "" }} onClick={async () => { setSelectedUser(null); await openRoomAndRead(room.id); }}>{room.room_name || `ルーム ${room.id}`}</div>
         ))}
         <h3 style={{ marginTop: "1rem" }}>ユーザー一覧</h3>
         {users.map(user => (
-          <div key={user.id} style={{ padding: "0.5rem", cursor: "pointer", background: selectedUser?.id === user.id ? "#eee" : "" }}
-            onClick={() => handleUserClick(user)}>{user.username}</div>
+          <div key={user.id} style={{ padding: "0.5rem", cursor: "pointer", background: selectedUser?.id === user.id ? "#eee" : "" }} onClick={() => handleUserClick(user)}>{user.username}</div>
         ))}
       </div>
-
       <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
         <div style={{ padding: "1rem", textAlign: "right" }}>
           <button onClick={async () => {
@@ -262,7 +348,6 @@ export default function ChatPage() {
           )}
         </div>
       </div>
-
       {previewUrl && (
         <div style={{ position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh", backgroundColor: "rgba(0,0,0,0.7)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000 }} onClick={() => setPreviewUrl(null)}>
           <img src={previewUrl} style={{ maxWidth: "90%", maxHeight: "90%", borderRadius: "8px" }} />

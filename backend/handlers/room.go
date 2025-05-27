@@ -62,10 +62,11 @@ func getOrCreateRoomID(user1ID, user2ID int) (int, error) {
 
 	if err == sql.ErrNoRows {
 		err = tx.QueryRow(`
-			INSERT INTO chat_rooms (room_name, is_group, created_at, updated_at)
-			VALUES ('', false, NOW(), NOW())
-			RETURNING id
-		`).Scan(&roomID)
+    INSERT INTO chat_rooms (room_name, is_group, created_at, updated_at)
+    VALUES ('', 0, NOW(), NOW())
+    RETURNING id
+`).Scan(&roomID)
+
 		if err != nil {
 			return 0, err
 		}

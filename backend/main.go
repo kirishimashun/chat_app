@@ -35,6 +35,7 @@ func main() {
 	r.HandleFunc("/group_rooms", handlers.GetGroupRooms).Methods("GET")
 	r.HandleFunc("/messages/read", handlers.MarkAllAsRead).Methods("POST")
 	r.HandleFunc("/upload", handlers.UploadImage).Methods("POST")
+	r.HandleFunc("/reactions", handlers.AddReaction).Methods("POST")
 
 	// 静的ファイル配信（画像URLアクセス用）
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./uploads"))))
