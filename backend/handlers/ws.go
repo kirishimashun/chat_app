@@ -182,6 +182,30 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 				NotifyUnreadCount(userID, roomID)
 			}
 
+		case "mention":
+			fromFloat, ok1 := raw["from"].(float64)
+			toFloat, ok2 := raw["to"].(float64)
+			roomIDFloat, ok3 := raw["room_id"].(float64)
+			message, ok4 := raw["message"].(string)
+
+			if !ok1 || !ok2 || !ok3 || !ok4 {
+				log.Println("⚠️ mention メッセージ形式エラー:", raw)
+				continue
+			}
+
+			from := int(fromFloat)
+			to := int(toFloat)
+			roomID := int(roomIDFloat)
+
+			log.Printf("📣 mention通知: from=%d → to=%d (%s)", from, to, message)
+
+			NotifyUser(to, map[string]interface{}{
+				"type":    "mention",
+				"from":    from,
+				"room_id": roomID,
+				"message": message,
+			})
+
 		case "reaction":
 			messageIDFloat, ok1 := raw["message_id"].(float64)
 			emojiStr, ok2 := raw["emoji"].(string)

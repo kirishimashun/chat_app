@@ -54,11 +54,18 @@ func getOrCreateRoomID(user1ID, user2ID int) (int, error) {
 	defer tx.Rollback()
 
 	err = tx.QueryRow(`
-		SELECT room_id FROM room_members
-		WHERE user_id IN ($1, $2)
-		GROUP BY room_id
-		HAVING COUNT(DISTINCT user_id) = 2
-	`, user1ID, user2ID).Scan(&roomID)
+	SELECT rm.room_id
+	FROM room_members rm
+	JOIN chat_rooms cr ON rm.room_id = cr.id
+	WHERE cr.is_group = 0
+	  AND rm.room_id IN (
+	    SELECT room_id FROM room_members WHERE user_id = $1
+	    INTERSECT
+	    SELECT room_id FROM room_members WHERE user_id = $2
+	  )
+	GROUP BY rm.room_id
+	HAVING COUNT(*) = 2
+`, user1ID, user2ID).Scan(&roomID)
 
 	if err == sql.ErrNoRows {
 		err = tx.QueryRow(`

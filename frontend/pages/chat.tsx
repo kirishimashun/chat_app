@@ -25,6 +25,8 @@ export default function ChatPage() {
 　const [menuOpenMessageId, setMenuOpenMessageId] = useState<number | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [roomId, setRoomId] = useState<number | null>(null);
+  const [userList, setUserList] = useState<{ id: number; name: string }[]>([]);
+
   const [roomMembers, setRoomMembers] = useState<User[]>([]);
   const [socket, setSocket] = useState<WebSocket | null>(null);
   const [groupRooms, setGroupRooms] = useState<RoomInfo[]>([]);
@@ -34,6 +36,11 @@ export default function ChatPage() {
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const [unreadCounts, setUnreadCounts] = useState<{ [roomId: number]: number }>({});
   const [userRoomMap, setUserRoomMap] = useState<{ [userId: number]: number }>({});
+ const [mentionList, setMentionList] = useState<
+  { from: number; room_id: number; message: string }[]
+>([]);
+
+  const [mentionOpen, setMentionOpen] = useState(false);
 
 
   const markAllAsRead = async (roomId: number) => {
@@ -142,32 +149,42 @@ export default function ChatPage() {
     await markAllAsRead(roomId);
   };
 
-  ws.onmessage = async (event) => {
+    ws.onmessage = async (event) => {
   const data = JSON.parse(event.data);
 
   if (data.type === "message") {
-    const msg = {
-      id: data.id,
-      room_id: data.room_id ?? roomId,
-      sender_id: data.sender_id,
-      content: data.content,
-      read_at: data.read_at ?? null,
-    };
-    if (msg.room_id !== roomId) return;
-    setMessages((prev) => [...prev, msg]);
-    if (msg.sender_id !== userId) markSingleAsRead(msg.id);
+  const msgRoomId = Number(data.room_id);
+  if (isNaN(msgRoomId) || msgRoomId !== roomId) return; // ← ここで厳格にroom_idを確認
+
+  const msg = {
+    id: data.id,
+    room_id: msgRoomId,
+    sender_id: data.sender_id,
+    content: data.content,
+    read_at: data.read_at ?? null,
+  };
+
+  setMessages((prev) => [...prev, msg]);
+  if (msg.sender_id !== userId) markSingleAsRead(msg.id);
 
     fetch("http://localhost:8080/unread_counts", { credentials: "include" })
       .then(res => res.json())
       .then(data => setUnreadCounts(data));
 
-  } else if (data.type === "read") {
-    const id = Number(data.message_id);
-    if (!isNaN(id)) {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, read_at: data.read_at } : m))
-      );
-    }
+} else if (data.type === "read") {
+  const id = Number(data.message_id);
+  if (!isNaN(id)) {
+    setMessages((prev) =>
+      prev.map((m) => {
+        // すでに read_at が存在していればそのまま（上書きしない）
+        if (m.id === id && !m.read_at) {
+          return { ...m, read_at: data.read_at };
+        }
+        return m;
+      })
+    );
+  }
+
   } else if (data.type === "reaction") {
     const id = Number(data.message_id);
     if (!isNaN(id)) {
@@ -201,17 +218,21 @@ export default function ChatPage() {
         )
       );
     }
-  } else if (data.type === "unread") {
-    const roomId = data.room_id;
-    const count = data.count;
-    setUnreadCounts(prev => ({
-      ...prev,
-      [roomId]: count,
-    }));
-  }
-};
-
-
+      } else if (data.type === "unread") {
+      const roomId = data.room_id;
+      const count = data.count;
+      setUnreadCounts(prev => ({
+        ...prev,
+        [roomId]: count,
+      }));
+    } else if (data.type === "mention") {
+      setMentionList((prev) => [...prev, {
+        from: data.from,
+        room_id: data.room_id,
+        message: data.message,
+      }]);
+    }
+  };
   ws.onclose = () => console.warn("WebSocket closed");
   ws.onerror = (err) => console.error("WebSocket error", err);
   return () => ws.close();
@@ -229,6 +250,17 @@ export default function ChatPage() {
   .then(data => setUnreadCounts(data));
 
   }, [userId]);
+
+  useEffect(() => {
+  if (!userId) return;
+  fetch("http://localhost:8080/users", { credentials: "include" })
+    .then((res) => res.json())
+    .then((data) => {
+      setUserList(data.map((u: User) => ({ id: u.id, name: u.username })));
+    })
+    .catch((err) => console.error("ユーザー取得失敗", err));
+}, [userId]);
+
 
   useEffect(() => {
   const handleClickOutside = (e: MouseEvent) => {
@@ -282,17 +314,41 @@ export default function ChatPage() {
   };
 
 const handleSendMessage = async () => {
-    if (!messageText.trim() || userId == null || roomId == null || !socket) return;
-    const msg = {
-      type: "message",
-      sender_id: userId,
-      receiver_id: selectedUser?.id,
-      room_id: roomId,
-      content: messageText.trim()
-    };
-    socket.send(JSON.stringify(msg));
-    setMessageText("");
+  if (!messageText.trim() || userId == null || roomId == null || !socket) return;
+
+  const content = messageText.trim();
+
+  // 通常メッセージ送信
+  const msg = {
+    type: "message",
+    sender_id: userId,
+    receiver_id: selectedUser?.id,
+    room_id: roomId,
+    content: content,
   };
+  socket.send(JSON.stringify(msg));
+
+  // @メンション検出（例: @taro）
+  const mentionRegex = /@([\w\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]+)/g;
+  const mentionedUsernames = [...content.matchAll(mentionRegex)].map(match => match[1]);
+
+  mentionedUsernames.forEach(username => {
+    const targetUser = users.find(u => u.username === username);
+    if (targetUser) {
+      const mention = {
+        type: "mention",
+        from: userId,
+        to: targetUser.id,
+        room_id: roomId,
+        message: content,
+      };
+      socket.send(JSON.stringify(mention));
+    }
+  });
+
+  setMessageText("");
+};
+
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -318,8 +374,16 @@ const handleSendMessage = async () => {
     const data = await res.json();
     await openRoomAndRead(data.room_id);
   };
+  const getUsernameById = (id: number): string => {
+  if (id === userId) return "自分";
+  const user = [...users, ...roomMembers].find((u) => u.id === id);
+  return user?.username || `ユーザー${id}`;
+};
 
-  const renderMessages = () => messages.map((msg, i) => {
+  const renderMessages = () =>
+  messages
+    .filter((msg) => msg.room_id === roomId) // ← ここで現在のルームのみに絞る
+    .map((msg, i) => {
   const isMyMessage = msg.sender_id === userId;
   const isReadByOther = isMyMessage && typeof msg.read_at === "string" && msg.read_at !== "null";
   const isImageLike = msg.content.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|svg)$/i)
@@ -339,6 +403,25 @@ const handleSendMessage = async () => {
       }}
       onClick={() => !isMyMessage && setActiveReactionMessageId(msg.id)}
     >
+       {!isImageLike && (
+      <p
+        style={{
+          fontSize: "0.8rem",
+          fontWeight: "bold",
+          marginBottom: "2px",
+          cursor: "pointer",
+          color: "blue",
+          alignSelf: isMyMessage ? "flex-end" : "flex-start",
+        }}
+        onClick={(e) => {
+          e.stopPropagation(); // 他のクリックイベントとの干渉防止
+          const name = getUsernameById(msg.sender_id);
+          setMessageText((prev) => prev + `@${name} `);
+        }}
+      >
+        {getUsernameById(msg.sender_id)}
+      </p>
+    )}
       <div style={{ position: "relative", display: "inline-block",overflow: "visible", }}>
         {isImageLike ? (
           <>
@@ -352,28 +435,30 @@ const handleSendMessage = async () => {
         ) : (
           <>
             {editingMessageId === msg.id ? (
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <input
-                  value={editingText}
-                  onChange={(e) => setEditingText(e.target.value)}
-                  style={{ padding: "0.3rem", borderRadius: "4px", border: "1px solid #ccc" }}
-                />
-                <button onClick={() => handleEditMessage(msg.id, editingText)}>保存</button>
-                <button onClick={() => setEditingMessageId(null)}>キャンセル</button>
-              </div>
-            ) : (
-              <div
-                style={{
-                  backgroundColor: isMyMessage ? "#dff0ff" : "#f1f1f1",
-                  padding: "0.5rem",
-                  borderRadius: "1rem",
-                  maxWidth: "70%",
-                  whiteSpace: "pre-wrap",
-                }}
-              >
-                {isMyMessage ? `自分: ${msg.content}` : `相手: ${msg.content}`}
-              </div>
-            )}
+  <div style={{ display: "flex", gap: "0.5rem" }}>
+    <input
+      value={editingText}
+      onChange={(e) => setEditingText(e.target.value)}
+      style={{ padding: "0.3rem", borderRadius: "4px", border: "1px solid #ccc" }}
+    />
+    <button onClick={() => handleEditMessage(msg.id, editingText)}>保存</button>
+    <button onClick={() => setEditingMessageId(null)}>キャンセル</button>
+  </div>
+) : (
+  <div
+    style={{
+      backgroundColor: isMyMessage ? "#dff0ff" : "#f1f1f1",
+      padding: "0.5rem",
+      borderRadius: "1rem",
+      maxWidth: "70%",
+      whiteSpace: "pre-wrap",
+    }}
+  >
+    {/* 👇 ここで msg.content のみ表示するよう変更 */}
+    {msg.content}
+  </div>
+)}
+
           </>
         )}
 
@@ -583,6 +668,71 @@ const handleSendMessage = async () => {
             router.push("/login");
           }} style={{ backgroundColor: "#e74c3c", color: "white", padding: "0.5rem 1rem", border: "none", borderRadius: "4px", cursor: "pointer" }}>ログアウト</button>
         </div>
+        <div style={{ position: "relative", textAlign: "right", padding: "0 1rem" }}>
+  <button
+    onClick={() => setMentionOpen(prev => !prev)}
+    style={{ background: "none", border: "none", position: "relative", cursor: "pointer" }}
+  >
+    <span style={{ fontSize: "1.5rem" }}>🔔</span>
+    {mentionList.length > 0 && (
+      <span style={{
+        position: "absolute",
+        top: "-6px",
+        right: "-6px",
+        background: "red",
+        color: "white",
+        borderRadius: "50%",
+        padding: "2px 6px",
+        fontSize: "0.7rem"
+      }}>
+        {mentionList.length}
+      </span>
+    )}
+  </button>
+
+  {mentionOpen && (
+    <div style={{
+      position: "absolute",
+      top: "2.5rem",
+      right: 0,
+      background: "white",
+      border: "1px solid #ccc",
+      borderRadius: "6px",
+      boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+      padding: "0.5rem",
+      zIndex: 1000,
+      width: "280px"
+    }}>
+      <strong>メンション通知</strong>
+      <ul style={{ listStyle: "none", paddingLeft: 0, marginTop: "0.5rem" }}>
+        {mentionList.map((m, idx) => (
+          <li key={idx} style={{ marginBottom: "0.75rem", fontSize: "0.9rem" }}>
+            📣 <strong>UserID: {m.from}</strong>：{m.message}<br />
+            <button
+              onClick={async () => {
+                setMentionOpen(false);
+                setSelectedUser(null);
+                await openRoomAndRead(m.room_id);
+              }}
+              style={{
+                fontSize: "0.75rem",
+                marginTop: "0.2rem",
+                background: "#eee",
+                border: "none",
+                padding: "0.2rem 0.4rem",
+                borderRadius: "4px",
+                cursor: "pointer",
+              }}
+            >
+              チャットを開く
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )}
+</div>
+
         <div style={{ padding: "1rem", flex: 1 }}>
           {roomId ? (
             <>

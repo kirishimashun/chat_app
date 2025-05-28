@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -66,7 +67,27 @@ func SendMessage(w http.ResponseWriter, r *http.Request) {
 		log.Printf("⚠️ message_reads 挿入エラー: %v", err)
 	}
 	// メッセージ送信後にBroadcast
+	// メッセージ送信後にBroadcast
 	BroadcastMessage(msg.RoomID, msg.ID, msg.SenderID, msg.Content, msg.Timestamp)
+
+	// メンション処理（@ユーザー名）
+	mentionRegex := regexp.MustCompile(`@([\p{Hiragana}\p{Katakana}\p{Han}a-zA-Z0-9_]+)`)
+	matches := mentionRegex.FindAllStringSubmatch(msg.Content, -1)
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		username := match[1]
+		var mentionedUserID int
+		err := db.Conn.QueryRow("SELECT id FROM users WHERE username = $1", username).Scan(&mentionedUserID)
+		if err == nil && mentionedUserID != msg.SenderID {
+			NotifyUser(mentionedUserID, map[string]interface{}{
+				"type":    "mention",
+				"user_id": msg.SenderID,
+				"message": msg.Content,
+			})
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(msg)
@@ -294,9 +315,12 @@ func GetMessages(w http.ResponseWriter, r *http.Request) {
 							Emoji  string `json:"emoji"`
 						}{UserID: uid, Emoji: emoji.String})
 					}
-					if uid != userID && readAt.Valid && m.ReadAt == nil {
-						m.ReadAt = &readAt.Time
+					if uid != userID && readAt.Valid {
+						if m.ReadAt == nil || readAt.Time.Before(*m.ReadAt) {
+							m.ReadAt = &readAt.Time
+						}
 					}
+
 				}
 			}
 		}
