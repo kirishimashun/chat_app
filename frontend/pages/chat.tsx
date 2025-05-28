@@ -108,13 +108,18 @@ export default function ChatPage() {
   setUnreadCounts(unreadData);
 
   // ✅ 自分にも未読数更新通知（バッジを消す）
-  if (socket && roomId != null) {
-    socket.send(JSON.stringify({
-      type: "read",
-      message_id: -1, // ダミーID（実際のread_at通知対象がない場合）
-      read_at: new Date().toISOString(),
-    }));
-  }
+  if (
+  socket &&
+  socket.readyState === WebSocket.OPEN &&
+  roomId != null
+) {
+  socket.send(JSON.stringify({
+    type: "read",
+    message_id: -1,
+    read_at: new Date().toISOString(),
+  }));
+}
+
 
 } catch (err) {
   console.error("❌ 未読数の取得に失敗", err);
@@ -218,13 +223,24 @@ export default function ChatPage() {
         )
       );
     }
-      } else if (data.type === "unread") {
-      const roomId = data.room_id;
-      const count = data.count;
-      setUnreadCounts(prev => ({
-        ...prev,
-        [roomId]: count,
-      }));
+      // これ ↓ に置き換えてください
+} else if (data.type === "unread") {
+  const roomId = data.room_id;
+  const count = data.count;
+
+  const updatedCounts: { [roomId: number]: number } = { [roomId]: count };
+
+  Object.entries(userRoomMap).forEach(([uid, rid]) => {
+    if (rid === roomId) {
+      updatedCounts[rid] = count;
+    }
+  });
+
+  setUnreadCounts(prev => ({
+    ...prev,
+    ...updatedCounts,
+  }));
+
     } else if (data.type === "mention") {
       setMentionList((prev) => [...prev, {
         from: data.from,
@@ -302,6 +318,16 @@ export default function ChatPage() {
       setEditingMessageId(null);
     }
   };
+  
+  const handleHardDeleteMessage = async (id: number) => {
+  const res = await fetch(`http://localhost:8080/messages/hard_delete?id=${id}`, {
+    method: "DELETE",
+    credentials: "include"
+  });
+  if (res.ok) {
+    setMessages(prev => prev.filter(m => m.id !== id));
+  }
+};
 
   const handleDeleteMessage = async (id: number) => {
     const res = await fetch(`http://localhost:8080/messages/delete?id=${id}`, {
@@ -480,62 +506,79 @@ const handleSendMessage = async () => {
       …
     </button>
     {menuOpenMessageId === msg.id && (
-      <div
-        ref={menuRef}
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          position: "absolute",
-          bottom: "2rem",
-          right: 0,
-          backgroundColor: "white",
-          border: "1px solid #ccc",
-          borderRadius: "6px",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
-          padding: "0.3rem 0.5rem",
-          display: "flex",
-          gap: "0.5rem",
-          zIndex: 1000
-        }}
-      >
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setEditingMessageId(msg.id);
-            setEditingText(msg.content);
-            setMenuOpenMessageId(null);
-          }}
-          style={{
-            background: "#eee",
-            border: "none",
-            padding: "0.3rem 0.5rem",
-            borderRadius: "4px",
-            cursor: "pointer"
-          }}
-        >
-          編集
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            handleDeleteMessage(msg.id);
-            setMenuOpenMessageId(null);
-          }}
-          style={{
-            background: "#fdd",
-            border: "none",
-            padding: "0.3rem 0.5rem",
-            borderRadius: "4px",
-            cursor: "pointer"
-          }}
-        >
-          送信取消
-        </button>
-      </div>
-    )}
+  <div
+    ref={menuRef}
+    onClick={(e) => e.stopPropagation()}
+    style={{
+      position: "absolute",
+      bottom: "2rem",
+      right: 0,
+      backgroundColor: "white",
+      border: "1px solid #ccc",
+      borderRadius: "6px",
+      boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+      padding: "0.4rem",
+      display: "flex",
+      flexDirection: "column",
+      gap: "0.3rem",
+      zIndex: 1000,
+      minWidth: "100px",
+    }}
+  >
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        setEditingMessageId(msg.id);
+        setEditingText(msg.content);
+        setMenuOpenMessageId(null);
+      }}
+      style={{
+        background: "#eee",
+        border: "none",
+        padding: "0.3rem 0.5rem",
+        borderRadius: "4px",
+        cursor: "pointer",
+      }}
+    >
+      編集
+    </button>
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        handleDeleteMessage(msg.id);
+        setMenuOpenMessageId(null);
+      }}
+      style={{
+        background: "#fdd",
+        border: "none",
+        padding: "0.3rem 0.5rem",
+        borderRadius: "4px",
+        cursor: "pointer",
+      }}
+    >
+      送信取消
+    </button>
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        handleHardDeleteMessage(msg.id);
+        setMenuOpenMessageId(null);
+      }}
+      style={{
+        background: "#faa",
+        border: "none",
+        padding: "0.3rem 0.5rem",
+        borderRadius: "4px",
+        cursor: "pointer",
+      }}
+    >
+      削除
+    </button>
   </div>
 )}
 
-
+  </div>
+)}
 
         {isMyMessage && isReadByOther && (
           <div style={{

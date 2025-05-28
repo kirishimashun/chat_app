@@ -39,6 +39,7 @@ func main() {
 	r.HandleFunc("/messages/edit", handlers.EditMessage).Methods("PUT")
 	r.HandleFunc("/room/unread_count", handlers.GetUnreadCount)
 	r.HandleFunc("/unread_counts", handlers.GetUnreadCount).Methods("GET")
+	r.HandleFunc("/messages/hard_delete", handlers.HardDeleteMessage).Methods("DELETE")
 
 	// main.go または router の設定箇所
 	r.HandleFunc("/messages/delete", handlers.DeleteMessage).Methods("DELETE")

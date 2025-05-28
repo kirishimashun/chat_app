@@ -70,6 +70,24 @@ func SendMessage(w http.ResponseWriter, r *http.Request) {
 	// メッセージ送信後にBroadcast
 	BroadcastMessage(msg.RoomID, msg.ID, msg.SenderID, msg.Content, msg.Timestamp)
 
+	// 未読通知の追加
+	rows, err := db.Conn.Query(`
+	SELECT user_id FROM room_members
+	WHERE room_id = $1 AND user_id != $2
+`, msg.RoomID, msg.SenderID)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var uid int
+			if err := rows.Scan(&uid); err == nil {
+				NotifyUser(uid, map[string]interface{}{
+					"type":    "unread",
+					"room_id": msg.RoomID,
+				})
+			}
+		}
+	}
+
 	// メンション処理（@ユーザー名）
 	mentionRegex := regexp.MustCompile(`@([\p{Hiragana}\p{Katakana}\p{Han}a-zA-Z0-9_]+)`)
 	matches := mentionRegex.FindAllStringSubmatch(msg.Content, -1)
@@ -477,6 +495,24 @@ func AddReaction(w http.ResponseWriter, r *http.Request) {
 		"emoji":      payload.Emoji,
 		"user_id":    userID,
 	})
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// 完全削除: メッセージをDBから削除する
+func HardDeleteMessage(w http.ResponseWriter, r *http.Request) {
+	idStr := r.URL.Query().Get("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	_, err = db.Conn.Exec("DELETE FROM messages WHERE id = $1", id)
+	if err != nil {
+		http.Error(w, "failed to delete message", http.StatusInternalServerError)
+		return
+	}
 
 	w.WriteHeader(http.StatusOK)
 }
