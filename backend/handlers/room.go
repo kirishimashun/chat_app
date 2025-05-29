@@ -72,7 +72,7 @@ func getOrCreateRoomID(user1ID, user2ID int) (int, error) {
     INSERT INTO chat_rooms (room_name, is_group, created_at, updated_at)
     VALUES ('', 0, NOW(), NOW())
     RETURNING id
-`).Scan(&roomID)
+    `).Scan(&roomID)
 
 		if err != nil {
 			return 0, err
@@ -87,10 +87,14 @@ func getOrCreateRoomID(user1ID, user2ID int) (int, error) {
 				return 0, err
 			}
 		}
+
+		log.Printf("✅ [新規] 1対1ルーム作成: user1=%d, user2=%d, room_id=%d", user1ID, user2ID, roomID)
+
 	} else if err != nil {
 		return 0, err
+	} else {
+		log.Printf("✅ [既存] 1対1ルーム取得: user1=%d, user2=%d, room_id=%d", user1ID, user2ID, roomID)
 	}
-
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}

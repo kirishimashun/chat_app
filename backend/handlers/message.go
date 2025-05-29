@@ -51,27 +51,50 @@ func SendMessage(w http.ResponseWriter, r *http.Request) {
 	msg.Content = req.Content
 
 	err = db.Conn.QueryRow(`
-		INSERT INTO messages (sender_id, room_id, content, created_at)
-		VALUES ($1, $2, $3, NOW())
-		RETURNING id, created_at
-	`, msg.SenderID, msg.RoomID, msg.Content).Scan(&msg.ID, &msg.Timestamp)
+	INSERT INTO messages (sender_id, room_id, content, created_at)
+	VALUES ($1, $2, $3, NOW())
+	RETURNING id, created_at
+`, msg.SenderID, msg.RoomID, msg.Content).Scan(&msg.ID, &msg.Timestamp)
 	if err != nil {
 		log.Println("❌ メッセージ保存失敗:", err)
 		http.Error(w, `{"error": "保存失敗"}`, http.StatusInternalServerError)
 		return
 	}
+
+	// 未読通知を送信（送信者以外のルームメンバーに通知）
+	rows, err := db.Conn.Query(`
+	SELECT user_id FROM room_members WHERE room_id = $1 AND user_id != $2
+`, msg.RoomID, msg.SenderID)
+	if err != nil {
+		log.Println("❌ 未読通知のメンバー取得失敗:", err)
+	} else {
+		defer rows.Close()
+		for rows.Next() {
+			var toUserID int
+			if err := rows.Scan(&toUserID); err == nil {
+				payload := map[string]interface{}{
+					"type":    "unread",
+					"room_id": msg.RoomID,
+					"count":   1, // ※正確な未読数を出すなら再集計でもOK
+				}
+				NotifyUser(toUserID, payload)
+				log.Printf("📡 未読通知: user_id=%d room_id=%d", toUserID, msg.RoomID)
+			}
+		}
+	}
+
 	log.Printf("✅ メッセージ保存成功: messageID=%d", msg.ID)
 
 	err = models.InsertMessageReads(db.Conn, msg.ID, msg.RoomID)
 	if err != nil {
 		log.Printf("⚠️ message_reads 挿入エラー: %v", err)
 	}
-	// メッセージ送信後にBroadcast
+
 	// メッセージ送信後にBroadcast
 	BroadcastMessage(msg.RoomID, msg.ID, msg.SenderID, msg.Content, msg.Timestamp)
 
-	// 未読通知の追加
-	rows, err := db.Conn.Query(`
+	// 未読通知の追加（← この部分全体を上書き）
+	rows, err = db.Conn.Query(`
 	SELECT user_id FROM room_members
 	WHERE room_id = $1 AND user_id != $2
 `, msg.RoomID, msg.SenderID)
@@ -80,9 +103,24 @@ func SendMessage(w http.ResponseWriter, r *http.Request) {
 		for rows.Next() {
 			var uid int
 			if err := rows.Scan(&uid); err == nil {
+				var count int
+				err := db.Conn.QueryRow(`
+				SELECT COUNT(*)
+				FROM message_reads
+				WHERE user_id = $1 AND read_at IS NULL
+				  AND message_id IN (
+				    SELECT id FROM messages WHERE room_id = $2
+				  )
+			`, uid, msg.RoomID).Scan(&count)
+				if err != nil {
+					log.Printf("❌ 未読数取得失敗: user_id=%d room_id=%d", uid, msg.RoomID)
+					count = 0
+				}
+
 				NotifyUser(uid, map[string]interface{}{
 					"type":    "unread",
 					"room_id": msg.RoomID,
+					"count":   count,
 				})
 			}
 		}

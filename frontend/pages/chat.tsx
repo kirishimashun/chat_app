@@ -72,12 +72,14 @@ export default function ChatPage() {
 
   const fetchRoomMap = async (users: User[]) => {
   const map: { [userId: number]: number } = {};
+  
   for (const user of users) {
     try {
       const res = await fetch(`http://localhost:8080/room?user_id=${user.id}`, {
         credentials: "include",
       });
       const data = await res.json();
+      console.log(data);
       if (data.room_id) {
         map[user.id] = data.room_id;
       }
@@ -113,11 +115,16 @@ export default function ChatPage() {
   socket.readyState === WebSocket.OPEN &&
   roomId != null
 ) {
+  // 最後のメッセージIDを探して送る
+const lastMessage = messages.slice().reverse().find(m => m.sender_id !== userId);
+if (lastMessage) {
   socket.send(JSON.stringify({
     type: "read",
-    message_id: -1,
+    message_id: lastMessage.id,
     read_at: new Date().toISOString(),
   }));
+}
+
 }
 
 
@@ -156,7 +163,7 @@ export default function ChatPage() {
 
     ws.onmessage = async (event) => {
   const data = JSON.parse(event.data);
-
+  
   if (data.type === "message") {
   const msgRoomId = Number(data.room_id);
   if (isNaN(msgRoomId) || msgRoomId !== roomId) return; // ← ここで厳格にroom_idを確認
@@ -225,20 +232,18 @@ export default function ChatPage() {
     }
       // これ ↓ に置き換えてください
 } else if (data.type === "unread") {
-  const roomId = data.room_id;
-  const count = data.count;
+  const roomId = Number(data.room_id);
+  const count = Number(data.count);
 
-  const updatedCounts: { [roomId: number]: number } = { [roomId]: count };
+  // room_id に対応する user_id を見つける（1対1チャット想定）
+  const matchedEntry = Object.entries(userRoomMap).find(([uid, rid]) => rid === roomId);
+  if (!matchedEntry) return;
 
-  Object.entries(userRoomMap).forEach(([uid, rid]) => {
-    if (rid === roomId) {
-      updatedCounts[rid] = count;
-    }
-  });
+  const matchedRoomId = Number(matchedEntry[1]);
 
   setUnreadCounts(prev => ({
     ...prev,
-    ...updatedCounts,
+    [matchedRoomId]: count,
   }));
 
     } else if (data.type === "mention") {
@@ -666,7 +671,9 @@ const handleSendMessage = async () => {
 ))}
 
         <h3 style={{ marginTop: "1rem" }}>ユーザー一覧</h3>
+        
         {users.map(user => {
+
   const roomId = userRoomMap[user.id];
   const unread = unreadCounts[roomId] || 0;
 

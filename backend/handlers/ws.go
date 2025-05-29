@@ -122,25 +122,23 @@ func handleIncomingMessages(userID int, conn *websocket.Conn) {
 					}
 
 					// 📡 未読バッジ通知（自分以外）
-					// 📡 未読バッジ通知（自分以外）
-					if member.ID != msg.SenderID {
-						var count int
-						err := db.Conn.QueryRow(`
-		SELECT COUNT(*) FROM message_reads mr
-		JOIN messages m ON mr.message_id = m.id
-		WHERE mr.user_id = $1 AND mr.read_at IS NULL AND m.room_id = $2
-	`, member.ID, msg.RoomID).Scan(&count)
+					// 🔁 member.ID に関係なく全員に通知（自分にも含める）
+					var count int
+					err = db.Conn.QueryRow(`
+  SELECT COUNT(*) FROM message_reads mr
+  JOIN messages m ON mr.message_id = m.id
+  WHERE mr.user_id = $1 AND mr.read_at IS NULL AND m.room_id = $2
+`, member.ID, msg.RoomID).Scan(&count)
+					if err != nil {
+						log.Printf("❌ 未読数取得失敗: userID=%d roomID=%d err=%v", member.ID, msg.RoomID, err)
+					} else {
+						err := conn.WriteJSON(map[string]interface{}{
+							"type":    "unread",
+							"room_id": msg.RoomID,
+							"count":   count,
+						})
 						if err != nil {
-							log.Printf("❌ 未読数取得失敗: userID=%d roomID=%d err=%v", member.ID, msg.RoomID, err)
-						} else {
-							err := conn.WriteJSON(map[string]interface{}{
-								"type":    "unread",
-								"room_id": msg.RoomID,
-								"count":   count,
-							})
-							if err != nil {
-								log.Println("⚠️ 未読数送信エラー:", err)
-							}
+							log.Println("⚠️ 未読数送信エラー:", err)
 						}
 					}
 
