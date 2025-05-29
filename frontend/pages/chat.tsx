@@ -69,7 +69,6 @@ export default function ChatPage() {
 };
 
 
-
   const fetchRoomMap = async (users: User[]) => {
   const map: { [userId: number]: number } = {};
   

@@ -292,7 +292,6 @@ func GetMessages(w http.ResponseWriter, r *http.Request) {
 		WHERE m.room_id = $1 AND mr.user_id = $2
 		  AND mr.read_at IS NOT NULL
 		  AND m.sender_id != $2
-		  AND mr.read_at > NOW() - INTERVAL '10 seconds'
 	`, roomID, userID)
 	if err == nil {
 		defer rowsNotify.Close()
@@ -425,7 +424,6 @@ func MarkAllAsRead(w http.ResponseWriter, r *http.Request) {
 			WHERE m.room_id = $1 AND mr.user_id = $2
 				AND mr.read_at IS NOT NULL
 				AND m.sender_id != $2
-				AND mr.read_at > NOW() - INTERVAL '10 seconds'
 		`, *payload.RoomID, userID)
 		if err == nil {
 			defer rows.Close()
