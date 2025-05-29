@@ -234,16 +234,11 @@ if (lastMessage) {
 } else if (data.type === "unread") {
   const roomId = Number(data.room_id);
   const count = Number(data.count);
-
-  // room_id に対応する user_id を見つける（1対1チャット想定）
-  const matchedEntry = Object.entries(userRoomMap).find(([uid, rid]) => rid === roomId);
-  if (!matchedEntry) return;
-
-  const matchedRoomId = Number(matchedEntry[1]);
+  if (isNaN(roomId) || isNaN(count)) return;
 
   setUnreadCounts(prev => ({
     ...prev,
-    [matchedRoomId]: count,
+    [roomId]: count,
   }));
 
     } else if (data.type === "mention") {

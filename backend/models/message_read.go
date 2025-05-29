@@ -3,6 +3,7 @@ package models
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"time"
 )
 
@@ -26,23 +27,26 @@ func InsertMessageReads(db *sql.DB, messageID int, roomID int) error {
 		return fmt.Errorf("error retrieving room members: %v", err)
 	}
 
-	// 送信者のIDを取得
 	senderID, err := GetSenderIDByMessageID(db, messageID)
 	if err != nil {
 		return fmt.Errorf("failed to get sender ID: %v", err)
 	}
+	log.Printf("✅ senderID=%d", senderID)
 
 	for _, member := range members {
+		log.Printf("🔍 比較中: member.ID=%d vs senderID=%d", member.ID, senderID)
 		if member.ID == senderID {
-			continue // 自分自身には read_at=NULL を入れない
+			continue // 自分自身は未読にしない
 		}
-		_, err := db.Exec(
-			"INSERT INTO message_reads (message_id, user_id, read_at) VALUES ($1, $2, NULL) ON CONFLICT (message_id, user_id) DO NOTHING",
-			messageID, member.ID,
-		)
+		_, err := db.Exec(`
+			INSERT INTO message_reads (message_id, user_id, read_at)
+			VALUES ($1, $2, NULL)
+			ON CONFLICT (message_id, user_id) DO NOTHING
+		`, messageID, member.ID)
 		if err != nil {
 			return fmt.Errorf("error inserting unread message: %v", err)
 		}
+		log.Printf("✅ 未読挿入: message_id=%d, user_id=%d", messageID, member.ID)
 	}
 	return nil
 }
